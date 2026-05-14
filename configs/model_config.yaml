@@ -1,0 +1,71 @@
+global:
+  # Public template only. Put real keys in environment variables or
+  # configs/model_config.local.yaml, which is intentionally git-ignored.
+  api_key: ""
+  base_url: ""
+  model: ""
+  timeout: 120
+  default_temperature: 0.0
+  default_seed: 666
+
+agents:
+  agent_1:  # 数据集生成与代码生成智能体
+    api_key: ""
+    base_url: "https://api.minimaxi.com/v1"
+    model: "MiniMax-M2.7"
+    temperature: 0.0
+    seed: 666
+    mysql:
+      host: 127.0.0.1
+      port: 3306
+      user: ""
+      password: ""
+      database: ""
+
+  agent_2_3:  # 医疗数据结构化与初步清洗智能体
+    api_key: ""
+    base_url: "https://api.minimaxi.com/v1"
+    model: "MiniMax-M2.7"
+    temperature: 0.0
+    seed: 666
+    embedding:
+      api_key: ""
+      base_url: "https://api.openai.com/v1"
+      model: "text-embedding-3-small"
+
+  agent_4:  # 任务裁剪智能体
+    api_key: ""
+    base_url: "https://api.minimaxi.com/v1"
+    model: "MiniMax-M2.7"
+    temperature: 0.2
+    seed: 666
+    task_text: ""
+
+  agent_5:  # 数据质量检测与自动清洗智能体
+    api_key: ""
+    base_url: "http://127.0.0.1:8317/v1"
+    model: "gpt-5.1"
+    temperature: 0.0
+    seed: 666
+
+  agent_6_7:  # 机器学习建模与结果评估智能体
+    api_key: ""
+    base_url: "https://api.minimaxi.com/v1"
+    model: "MiniMax-M2.7"
+    temperature: 0.0
+    seed: 666
+
+  memory_agent:  # 记忆管理智能体
+    api_key: ""
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4.1-mini"
+    temperature: 0.0
+    seed: 666
+    enable_thinking: false
+
+  main_orchestrator:  # 主链路编排智能体
+    api_key: ""
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4.1-mini"
+    temperature: 0.0
+    seed: 666

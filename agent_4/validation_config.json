@@ -1,0 +1,43 @@
+{
+  "constraints": {
+    "age": {
+      "min": 0,
+      "max": 150,
+      "description": "年龄应在0-150之间"
+    },
+    "temperature": {
+      "min": 35,
+      "max": 42,
+      "description": "体温应在35-42摄氏度之间"
+    },
+    "blood_pressure_systolic": {
+      "min": 70,
+      "max": 200,
+      "description": "收缩压应在70-200mmHg之间"
+    },
+    "blood_pressure_diastolic": {
+      "min": 40,
+      "max": 130,
+      "description": "舒张压应在40-130mmHg之间"
+    },
+    "heart_rate": {
+      "min": 30,
+      "max": 200,
+      "description": "心率应在30-200次/分钟之间"
+    }
+  },
+  "patterns": {
+    "email": {
+      "pattern": "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$",
+      "description": "邮箱格式验证"
+    },
+    "phone": {
+      "pattern": "^\\+?[1-9]\\d{1,14}$",
+      "description": "电话号码格式验证"
+    },
+    "id_card": {
+      "pattern": "^\\d{17}[\\dXx]$",
+      "description": "身份证号码格式验证"
+    }
+  }
+}

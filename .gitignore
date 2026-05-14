@@ -1,0 +1,59 @@
+# Local secrets and environment
+.env
+*.env
+configs/model_config.local.yaml
+cs
+
+# Python caches and local tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+.vscode/
+
+# Runtime outputs
+program/output/
+reorganized_output/
+output/
+logs/
+agent_1/generated_reorganizer.py
+memory_agent/debug/
+memory_agent/memory_bank.json
+agent_4/column_risk_report.json
+agent_6-7/output_step6_mimic/
+**/RAW_RESPONSE_attempt_*.txt
+
+# Local datasets and generated data
+rawdata/
+rawdata-1/
+mimic-10/
+mimic-mini/
+agent_2-3/table/
+agent_4/data/
+agent_4/data_input/*
+!agent_4/data_input/.gitkeep
+agent_5/file/
+agent_5/data_input/*
+!agent_5/data_input/.gitkeep
+agent_6-7/data/
+
+# Large model weights and binary artifacts
+agent_1/doclayout_yolo/test/
+agent_1/doclayout_yolo/model/*.pt
+agent_6-7/models/
+*.pt
+*.bin
+*.safetensors
+*.npy
+
+# Spreadsheet / tabular data files are treated as local data.
+*.csv
+*.tsv
+*.xls
+*.xlsx
+
+# Local app settings
+.claude/
+*.local.json

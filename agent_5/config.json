@@ -1,0 +1,16 @@
+{
+    "model_configs": {
+        "openai_configs": {
+            "model": "gpt-4.1-mini",
+            "api_key": "${OPENAI_API_KEY}",
+            "generate_args": {
+                "temperature": 0.2
+            }
+        }
+    },
+    "workflow_configs": {
+        "logging_level": "INFO",
+        "save_dir": "./logs",
+        "use_monitor": true
+    }
+}

@@ -1,0 +1,608 @@
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+AGENT1_DIR = PROJECT_ROOT / "agent_1"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+if str(AGENT1_DIR) not in sys.path:
+    sys.path.insert(0, str(AGENT1_DIR))
+
+from codegen_tools import extract_patient_id  # noqa: E402
+
+
+TABULAR_SUFFIXES = {".csv", ".xls", ".xlsx", ".tsv"}
+VISUAL_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".pdf"}
+SUPPORTED_SUFFIXES = TABULAR_SUFFIXES | VISUAL_SUFFIXES
+EXCLUDED_DIR_NAMES = {"__pycache__", "reorganized_output"}
+EXCLUDED_FILE_NAMES = {".DS_Store"}
+
+
+@dataclass(frozen=True)
+class FileTask:
+    source_path: str
+    relative_path: str
+    suffix: str
+    patient_id: str | None
+    processable: bool
+
+
+@dataclass(frozen=True)
+class ModalityPatch:
+    source_path: str
+    modality: str
+    evidence: str
+    details: dict[str, Any] | None = None
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class TableSplitPatch:
+    source_path: str
+    should_split: bool
+    id_column: str | None
+    evidence: str
+    error: str = ""
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def get_step1_max_workers() -> int:
+    raw = os.environ.get("STEP1_MAX_WORKERS", "4")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 4
+
+
+def is_step1_parallel_enabled() -> bool:
+    return _env_bool("STEP1_PARALLEL_ENABLED", True)
+
+
+def _resolve_path(path: str | Path) -> Path:
+    value = Path(path).expanduser()
+    if not value.is_absolute():
+        value = PROJECT_ROOT / value
+    return value.resolve()
+
+
+def _is_under_program_output(path: Path) -> bool:
+    parts = path.parts
+    for index, part in enumerate(parts[:-1]):
+        if part == "program" and index + 1 < len(parts) and parts[index + 1] == "output":
+            return True
+    return False
+
+
+def _is_recordable_input_file(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    if path.name in EXCLUDED_FILE_NAMES or path.name.startswith("."):
+        return False
+    if path.suffix.lower() in {".tmp", ".temp", ".bak", ".swp"}:
+        return False
+    if any(part.startswith(".") for part in path.parts):
+        return False
+    if any(part in EXCLUDED_DIR_NAMES for part in path.parts):
+        return False
+    return not _is_under_program_output(path)
+
+
+def _is_supported_input_file(path: Path) -> bool:
+    return _is_recordable_input_file(path) and path.suffix.lower() in SUPPORTED_SUFFIXES
+
+
+def scan_source_files(input_path: str | Path) -> list[FileTask]:
+    root = _resolve_path(input_path)
+    if root.is_file():
+        files = [root] if _is_recordable_input_file(root) else []
+        base = root.parent
+    elif root.is_dir():
+        files = [item for item in sorted(root.rglob("*")) if _is_recordable_input_file(item)]
+        base = root
+    else:
+        return []
+
+    tasks: list[FileTask] = []
+    for file_path in sorted(files):
+        relative_path = str(file_path.relative_to(base))
+        tasks.append(
+            FileTask(
+                source_path=str(file_path),
+                relative_path=relative_path,
+                suffix=file_path.suffix.lower(),
+                patient_id=extract_patient_id(str(file_path), ""),
+                processable=_is_supported_input_file(file_path),
+            )
+        )
+    return tasks
+
+
+def build_base_records(tasks: list[FileTask]) -> list[dict[str, Any]]:
+    records = []
+    for task in tasks:
+        path = Path(task.source_path)
+        if task.suffix in TABULAR_SUFFIXES:
+            modality = "table"
+        elif task.processable:
+            modality = "ocr"
+        else:
+            modality = "unsupported"
+        records.append(
+            {
+                "source_path": task.source_path,
+                "source_name": path.name,
+                "patient_id": task.patient_id,
+                "relative_path": task.relative_path,
+                "file_info": {
+                    "suffix": task.suffix,
+                    "size_bytes": path.stat().st_size if path.exists() else None,
+                    "processable": task.processable,
+                },
+                "observations": {
+                    "modality": modality,
+                    "should_split": False,
+                    "id_column": None,
+                    "status": "pending" if task.processable else "unsupported",
+                },
+            }
+        )
+    return records
+
+
+def infer_file_modality(task: FileTask) -> ModalityPatch:
+    """Legacy fallback for a single file. Prefer infer_visual_modalities() for batches."""
+    try:
+        if not task.processable:
+            return ModalityPatch(task.source_path, "unsupported", "unsupported suffix")
+        if task.suffix in TABULAR_SUFFIXES:
+            return ModalityPatch(task.source_path, "table", "tabular suffix")
+        if task.suffix in VISUAL_SUFFIXES:
+            return _fallback_visual_modality(task, evidence_prefix="doclayout fallback")
+        return ModalityPatch(task.source_path, "ocr", "fallback")
+    except Exception as exc:
+        return ModalityPatch(task.source_path, "ocr", "fallback on error", error=str(exc))
+
+
+def _fallback_visual_modality(task: FileTask, evidence_prefix: str = "fallback") -> ModalityPatch:
+    path_parts = [part.lower() for part in Path(task.source_path).parts]
+    if "images" in path_parts:
+        return ModalityPatch(task.source_path, "figure", f"{evidence_prefix}: path contains images")
+    return ModalityPatch(task.source_path, "ocr", f"{evidence_prefix}: visual suffix default")
+
+
+def _doclayout_enabled() -> bool:
+    raw = os.environ.get("STEP1_DOCLAYOUT_ENABLED", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _normalize_doclayout_modality(value: Any) -> str:
+    raw = str(value or "ocr").strip().lower()
+    if raw in {"figure", "ocr+figure"}:
+        return "figure"
+    return "ocr"
+
+
+def _infer_doclayout_for_visual_tasks(input_path: str | Path, tasks: list[FileTask]) -> list[ModalityPatch]:
+    if not tasks:
+        return []
+    if not _doclayout_enabled():
+        return [_fallback_visual_modality(task, evidence_prefix="doclayout disabled") for task in tasks]
+    try:
+        from layout_analysis_tool import infer_and_save_layout
+
+        response = infer_and_save_layout(str(input_path), save_outputs=False)
+        payload = json.loads(getattr(response, "content", "{}") or "{}")
+        if isinstance(payload, dict) and payload.get("error"):
+            message = json.dumps(payload.get("error"), ensure_ascii=False)
+            return [
+                _fallback_visual_modality(task, evidence_prefix=f"doclayout error: {message}")
+                for task in tasks
+            ]
+        classification = payload.get("classification") or []
+        by_relative: dict[str, dict[str, Any]] = {}
+        by_name: dict[str, dict[str, Any]] = {}
+        for item in classification:
+            if not isinstance(item, dict):
+                continue
+            rel = str(item.get("relative_path") or "").strip()
+            name = str(item.get("file_name") or "").strip()
+            if rel:
+                by_relative[rel] = item
+            if name:
+                by_name[name] = item
+
+        patches: list[ModalityPatch] = []
+        for task in tasks:
+            source = Path(task.source_path)
+            item = by_relative.get(task.relative_path) or by_name.get(source.name)
+            if not item:
+                patches.append(_fallback_visual_modality(task, evidence_prefix="doclayout missing result"))
+                continue
+            modality = _normalize_doclayout_modality(item.get("modality"))
+            patches.append(
+                ModalityPatch(
+                    source_path=task.source_path,
+                    modality=modality,
+                    evidence="doclayout-yolo",
+                    details={
+                        "relative_path": item.get("relative_path"),
+                        "file_name": item.get("file_name"),
+                        "raw_modality": item.get("modality"),
+                    },
+                )
+            )
+        return patches
+    except Exception as exc:
+        return [
+            _fallback_visual_modality(task, evidence_prefix=f"doclayout exception: {exc}")
+            for task in tasks
+        ]
+
+
+def _read_table(path: Path) -> pd.DataFrame:
+    if path.suffix.lower() == ".csv":
+        return pd.read_csv(path, dtype=str, keep_default_na=False)
+    if path.suffix.lower() == ".tsv":
+        return pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
+    return pd.read_excel(path, dtype=str)
+
+
+def _detect_id_column(df: pd.DataFrame) -> str | None:
+    normalized = {
+        str(column).strip().lower().replace(" ", "").replace("_", ""): str(column)
+        for column in df.columns
+    }
+    preferred = [
+        "subjectid",
+        "patientid",
+        "hadmid",
+        "stayid",
+        "id",
+        "病例号",
+        "病人id",
+        "患者id",
+        "患者编号",
+        "病历号",
+    ]
+    for item in preferred:
+        if item in normalized:
+            return normalized[item]
+    return None
+
+
+def infer_table_split_strategy(task: FileTask) -> TableSplitPatch:
+    if task.suffix not in TABULAR_SUFFIXES:
+        return TableSplitPatch(task.source_path, False, None, "non-tabular")
+    try:
+        df = _read_table(Path(task.source_path))
+        id_column = _detect_id_column(df)
+        return TableSplitPatch(
+            source_path=task.source_path,
+            should_split=id_column is not None,
+            id_column=id_column,
+            evidence="detected id column" if id_column else "no id column",
+        )
+    except Exception as exc:
+        return TableSplitPatch(
+            source_path=task.source_path,
+            should_split=False,
+            id_column=None,
+            evidence="fallback on error",
+            error=str(exc),
+        )
+
+
+def _run_pool(items, fn, max_workers: int):
+    if max_workers <= 1:
+        return [fn(item) for item in items]
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_item = {executor.submit(fn, item): item for item in items}
+        for future in as_completed(future_to_item):
+            results.append(future.result())
+    return results
+
+
+def source_scanner_handoff(input_path: str | Path) -> list[FileTask]:
+    return scan_source_files(input_path)
+
+
+def source_record_handoff(tasks: list[FileTask]) -> list[dict[str, Any]]:
+    return build_base_records(tasks)
+
+
+def modality_handoff(
+    input_path: str | Path,
+    tasks: list[FileTask],
+    workers: int,
+) -> tuple[list[ModalityPatch], dict[str, int]]:
+    processable_tasks = [task for task in tasks if task.processable]
+    unsupported_tasks = [task for task in tasks if not task.processable]
+    table_tasks = [task for task in processable_tasks if task.suffix in TABULAR_SUFFIXES]
+    visual_tasks = [task for task in processable_tasks if task.suffix in VISUAL_SUFFIXES]
+    other_tasks = [
+        task
+        for task in processable_tasks
+        if task.suffix not in TABULAR_SUFFIXES and task.suffix not in VISUAL_SUFFIXES
+    ]
+    table_modality_patches = [ModalityPatch(task.source_path, "table", "tabular suffix") for task in table_tasks]
+    visual_modality_patches = _infer_doclayout_for_visual_tasks(input_path, visual_tasks)
+    other_modality_patches = _run_pool(other_tasks, infer_file_modality, workers)
+    unsupported_modality_patches = [
+        ModalityPatch(task.source_path, "unsupported", "unsupported suffix") for task in unsupported_tasks
+    ]
+    return (
+        table_modality_patches
+        + visual_modality_patches
+        + other_modality_patches
+        + unsupported_modality_patches,
+        {
+            "processable_files": len(processable_tasks),
+            "unsupported_files": len(unsupported_tasks),
+        },
+    )
+
+
+def table_split_handoff(tasks: list[FileTask], workers: int) -> list[TableSplitPatch]:
+    table_tasks = [task for task in tasks if task.processable and task.suffix in TABULAR_SUFFIXES]
+    return _run_pool(table_tasks, infer_table_split_strategy, workers)
+
+
+def records_reducer_handoff(
+    records: list[dict[str, Any]],
+    modality_patches: list[ModalityPatch],
+    table_patches: list[TableSplitPatch],
+    records_path: str | Path,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    records_by_path = {record["source_path"]: record for record in records}
+    worker_errors: list[str] = []
+    for patch in sorted(modality_patches, key=lambda item: item.source_path):
+        record = records_by_path.get(patch.source_path)
+        if record:
+            record["observations"]["modality"] = patch.modality
+            if patch.modality == "unsupported":
+                record["observations"]["status"] = "unsupported"
+            elif record["observations"].get("status") != "unsupported":
+                record["observations"]["status"] = "ready"
+            record.setdefault("worker_evidence", {})["modality"] = patch.evidence
+            if patch.details:
+                record["observations"]["layout_analysis"] = dict(patch.details)
+        if patch.error:
+            worker_errors.append(f"modality:{patch.source_path}: {patch.error}")
+
+    for patch in sorted(table_patches, key=lambda item: item.source_path):
+        record = records_by_path.get(patch.source_path)
+        if record:
+            record["observations"]["should_split"] = bool(patch.should_split)
+            record["observations"]["id_column"] = patch.id_column
+            record.setdefault("worker_evidence", {})["table_split"] = patch.evidence
+        if patch.error:
+            worker_errors.append(f"table_split:{patch.source_path}: {patch.error}")
+
+    output = Path(records_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    ordered_records = sorted(records, key=lambda item: item["source_path"])
+    tmp_path = output.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(ordered_records, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(output)
+    return ordered_records, worker_errors
+
+
+def build_records_parallel(
+    input_path: str | Path,
+    records_path: str | Path,
+    max_workers: int | None = None,
+    parallel_enabled: bool | None = None,
+) -> dict[str, Any]:
+    tasks = source_scanner_handoff(input_path)
+    workers = max_workers if max_workers is not None else get_step1_max_workers()
+    use_parallel = is_step1_parallel_enabled() if parallel_enabled is None else bool(parallel_enabled)
+    if not use_parallel:
+        workers = 1
+
+    records = source_record_handoff(tasks)
+    modality_patches, file_counts = modality_handoff(input_path, tasks, workers)
+    table_patches = table_split_handoff(tasks, workers)
+    ordered_records, worker_errors = records_reducer_handoff(
+        records=records,
+        modality_patches=modality_patches,
+        table_patches=table_patches,
+        records_path=records_path,
+    )
+
+    return {
+        "records_path": str(Path(records_path)),
+        "records_count": len(ordered_records),
+        "source_files": len(tasks),
+        "processable_files": file_counts["processable_files"],
+        "unsupported_files": file_counts["unsupported_files"],
+        "eligible_files": file_counts["processable_files"],
+        "max_workers": workers,
+        "parallel_enabled": use_parallel,
+        "worker_errors": worker_errors,
+        "records_modality_counts": _count_modalities(ordered_records),
+        "split_tables": sum(1 for item in ordered_records if item.get("observations", {}).get("should_split")),
+        "handoffs": [
+            "SourceScanner",
+            "SourceRecordWorker",
+            "ModalityWorkerPool",
+            "TableSplitWorkerPool",
+            "RecordsReducer",
+        ],
+    }
+
+
+def _count_modalities(records: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        modality = str(record.get("observations", {}).get("modality") or "")
+        if modality:
+            counts[modality] = counts.get(modality, 0) + 1
+    return counts
+
+
+def _load_records(records_path: str | Path) -> list[dict[str, Any]]:
+    parsed = json.loads(Path(records_path).read_text(encoding="utf-8"))
+    if not isinstance(parsed, list):
+        raise ValueError("records.json 顶层必须是 list")
+    return [item for item in parsed if isinstance(item, dict)]
+
+
+def _infer_input_root(records: list[dict[str, Any]]) -> Path:
+    source_paths = [Path(str(item.get("source_path"))).resolve() for item in records if item.get("source_path")]
+    if not source_paths:
+        return PROJECT_ROOT
+    common = Path(os.path.commonpath([str(path.parent) for path in source_paths]))
+    if common.name in {"notes", "structured"} or common.name.startswith("s"):
+        return common.parent
+    return common
+
+
+def _safe_patient_id(value: Any, fallback: str = "unknown") -> str:
+    extracted = extract_patient_id("", str(value or ""))
+    return extracted or str(value or "").strip() or fallback
+
+
+def _write_table(df: pd.DataFrame, target_path: Path, suffix: str) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    if suffix == ".tsv":
+        df.to_csv(target_path, sep="\t", index=False)
+    elif suffix == ".csv":
+        df.to_csv(target_path, index=False)
+    else:
+        df.to_excel(target_path, index=False)
+
+
+def _copy_or_write_record_file(record: dict[str, Any], input_root: Path, output_root: Path) -> int:
+    source = Path(str(record.get("source_path"))).resolve()
+    observations = record.get("observations") or {}
+    modality = str(observations.get("modality") or "ocr")
+    patient_id = str(record.get("patient_id") or "") or _safe_patient_id(source.stem)
+    try:
+        relative_parent = source.parent.relative_to(input_root)
+    except ValueError:
+        relative_parent = Path(str(record.get("relative_path") or source.name)).parent
+
+    if modality == "table" and observations.get("should_split") and observations.get("id_column"):
+        df = _read_table(source)
+        id_column = str(observations["id_column"])
+        if id_column not in df.columns:
+            raise ValueError(f"表格缺少 id_column={id_column}: {source}")
+        written = 0
+        for raw_id, group in df.groupby(id_column, dropna=False):
+            group_patient_id = _safe_patient_id(raw_id, patient_id)
+            target = output_root / group_patient_id / modality / relative_parent / source.name
+            _write_table(group, target, source.suffix.lower())
+            written += 1
+        return written
+
+    target = output_root / patient_id / modality / relative_parent / source.name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+    return 1
+
+
+def _is_processable_record(record: dict[str, Any]) -> bool:
+    observations = record.get("observations") or {}
+    if str(observations.get("status") or "").lower() == "unsupported":
+        return False
+    if str(observations.get("modality") or "").lower() == "unsupported":
+        return False
+    source = Path(str(record.get("source_path") or ""))
+    return source.suffix.lower() in SUPPORTED_SUFFIXES
+
+
+def run_reorganize_from_records(
+    records_path: str | Path,
+    output_root: str | Path,
+    input_root: str | Path | None = None,
+    clean_output: bool = True,
+) -> dict[str, Any]:
+    records = _load_records(records_path)
+    root = _resolve_path(input_root) if input_root else _infer_input_root(records)
+    output = _resolve_path(output_root)
+    if clean_output and output.exists():
+        if output.is_dir():
+            shutil.rmtree(output)
+        else:
+            output.unlink()
+    output.mkdir(parents=True, exist_ok=True)
+
+    written_files = 0
+    processed_records = 0
+    skipped_records = 0
+    errors: list[str] = []
+    for record in records:
+        if not _is_processable_record(record):
+            skipped_records += 1
+            continue
+        processed_records += 1
+        try:
+            written_files += _copy_or_write_record_file(record, root, output)
+        except Exception as exc:
+            errors.append(f"{record.get('source_path')}: {exc}")
+
+    return {
+        "status": "SUCCESS" if not errors else "FAILED",
+        "records_path": str(records_path),
+        "output_root": str(output),
+        "input_root": str(root),
+        "records_count": len(records),
+        "processed_records": processed_records,
+        "skipped_records": skipped_records,
+        "written_files": written_files,
+        "errors": errors,
+    }
+
+
+def write_generated_reorganizer(
+    script_path: str | Path,
+    records_path: str | Path,
+    output_root: str | Path,
+    input_root: str | Path | None = None,
+) -> str:
+    script = Path(script_path)
+    script.parent.mkdir(parents=True, exist_ok=True)
+    orchestrator_dir = PROJECT_ROOT / "main_orchestrator"
+    input_root_literal = str(input_root or "")
+    content = f'''from pathlib import Path
+import json
+import sys
+
+PROJECT_ROOT = Path(r"{PROJECT_ROOT}")
+ORCHESTRATOR_DIR = PROJECT_ROOT / "main_orchestrator"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+if str(ORCHESTRATOR_DIR) not in sys.path:
+    sys.path.insert(0, str(ORCHESTRATOR_DIR))
+
+from step1_parallel import run_reorganize_from_records
+
+
+if __name__ == "__main__":
+    result = run_reorganize_from_records(
+        records_path=Path(r"{records_path}"),
+        output_root=Path(r"{output_root}"),
+        input_root=Path(r"{input_root_literal}") if r"{input_root_literal}" else None,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    raise SystemExit(0 if result.get("status") == "SUCCESS" else 1)
+'''
+    script.write_text(content, encoding="utf-8")
+    return str(script)

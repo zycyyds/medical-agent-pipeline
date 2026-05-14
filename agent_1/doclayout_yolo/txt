@@ -1,0 +1,23 @@
+doclayout_yolo_doclaynet_imgsz1120_docsynth_pretrain.pt 
+  0: Caption（图注、说明文字）
+  1: Footnote（脚注）
+  2: Formula（公式）
+  3: List-item（列表项）
+  4: Page-footer（页脚）
+  5: Page-header（页眉）
+  6: Picture（图片、图像）
+  7: Section-header（章节标题）
+  8: Table（表格）
+  9: Text（正文文本）
+  10: Title（标题）
+doclayout_yolo_docstructbench_imgsz1024.pt 
+  0: title（标题）
+  1: plain text（正文文本）
+  2: abandon（弃用区域/无效区域）
+  3: figure（图像、图）
+  4: figure_caption（图注）
+  5: table（表格）
+  6: table_caption（表格标题）
+  7: table_footnote（表格脚注）
+  8: isolate_formula（独立公式）
+  9: formula_caption（公式说明文字）

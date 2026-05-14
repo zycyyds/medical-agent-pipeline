@@ -1,0 +1,6 @@
+# ICD-10 BERT 向量库（可选，用于语义最近邻编码）
+# pip install -r requirements_icd_bert.txt
+sentence-transformers>=2.2.0
+torch>=2.0.0
+
+# 仅从魔搭下载权重: pip install -r requirements_modelscope.txt

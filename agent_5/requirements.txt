@@ -1,0 +1,6 @@
+agentscope>=0.1.0
+pandas>=1.5.0
+numpy>=1.21.0
+openai>=1.0.0
+dashscope>=1.0.0  # For Qwen models
+anthropic>=0.3.0  # For Claude models
