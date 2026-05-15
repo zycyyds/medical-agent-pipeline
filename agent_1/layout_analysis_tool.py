@@ -56,11 +56,11 @@ def _get_model(model_path: str | None = None) -> YOLOv10:
 
 
 def _get_doclayout_batch_size() -> int:
-    raw = os.environ.get("STEP1_DOCLAYOUT_BATCH_SIZE", "8")
+    raw = os.environ.get("STEP1_DOCLAYOUT_BATCH_SIZE", "16")
     try:
         return max(1, int(raw))
     except ValueError:
-        return 8
+        return 16
 
 
 def _rect_union_area(rects: list[tuple[float, float, float, float]]) -> float:
@@ -293,6 +293,7 @@ def _run_inference_and_save(
     figure_class_id: int,
     figure_ratio_threshold: float,
     save_outputs: bool = True,
+    progress_callback=None,
 ) -> tuple[list[dict], int]:
     try:
         model = _get_model(model_path=model_path)
@@ -310,6 +311,10 @@ def _run_inference_and_save(
     processed = 0
     batch_size = _get_doclayout_batch_size()
 
+    def _report_progress() -> None:
+        if progress_callback:
+            progress_callback("DocLayout-YOLO", processed, len(file_entries))
+
     def _append_fallback(img_path: str, rel_path: str) -> None:
         nonlocal processed
         classification.append(
@@ -320,6 +325,7 @@ def _run_inference_and_save(
             }
         )
         processed += 1
+        _report_progress()
 
     def _append_result(img_path: str, rel_path: str, result) -> None:
         nonlocal processed
@@ -400,6 +406,7 @@ def _run_inference_and_save(
             }
         )
         processed += 1
+        _report_progress()
 
     for start in range(0, len(file_entries), batch_size):
         batch = file_entries[start : start + batch_size]
@@ -1512,6 +1519,7 @@ def infer_and_save_layout(
     figure_class_id: int = FIGURE_CLASS_ID,
     figure_ratio_threshold: float = 0.5,
     save_outputs: bool = True,
+    progress_callback=None,
 ) -> ToolResponse:
     """
     对指定路径下的图片执行版面分析，保存可视化结果与检测 JSON，并返回分类结果。
@@ -1559,6 +1567,7 @@ def infer_and_save_layout(
             figure_class_id=figure_class_id,
             figure_ratio_threshold=figure_ratio_threshold,
             save_outputs=save_outputs,
+            progress_callback=progress_callback,
         )
     except RuntimeError as e:
         return ToolResponse(

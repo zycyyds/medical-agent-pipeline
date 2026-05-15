@@ -65,6 +65,7 @@ def test_layout_inference_uses_batch_predict_when_outputs_disabled(tmp_path, mon
     image_a = tmp_path / "a.jpg"
     image_b = tmp_path / "b.jpg"
     calls = []
+    progress_events = []
 
     class FakeResult:
         def tojson(self):
@@ -90,8 +91,19 @@ def test_layout_inference_uses_batch_predict_when_outputs_disabled(tmp_path, mon
         figure_class_id=3,
         figure_ratio_threshold=0.5,
         save_outputs=False,
+        progress_callback=lambda label, current, total: progress_events.append((label, current, total)),
     )
 
     assert calls == [[str(image_a), str(image_b)]]
     assert processed == 2
     assert [item["relative_path"] for item in classification] == ["a.jpg", "b.jpg"]
+    assert progress_events == [("DocLayout-YOLO", 1, 2), ("DocLayout-YOLO", 2, 2)]
+
+
+def test_doclayout_batch_size_defaults_to_16(monkeypatch):
+    _install_layout_stubs()
+    from agent_1 import layout_analysis_tool as tool
+
+    monkeypatch.delenv("STEP1_DOCLAYOUT_BATCH_SIZE", raising=False)
+
+    assert tool._get_doclayout_batch_size() == 16

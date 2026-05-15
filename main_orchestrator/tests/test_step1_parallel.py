@@ -79,6 +79,41 @@ def test_reorganize_from_records_splits_tables_by_subject_id(tmp_path, monkeypat
     assert not (output_root / "unknown" / "unsupported" / "mini_manifest.json").exists()
 
 
+def test_reorganize_from_records_parallel_matches_serial_output(tmp_path, monkeypatch):
+    monkeypatch.setenv("STEP1_DOCLAYOUT_ENABLED", "0")
+    sample = tmp_path / "mimic"
+    sample.mkdir()
+    _build_sample(sample)
+    records_path = tmp_path / "records.json"
+    serial_output = tmp_path / "serial_step1_results"
+    parallel_output = tmp_path / "parallel_step1_results"
+
+    build_records_parallel(sample, records_path, max_workers=4, parallel_enabled=True)
+    serial = run_reorganize_from_records(
+        records_path,
+        serial_output,
+        input_root=sample,
+        parallel_enabled=False,
+    )
+    parallel = run_reorganize_from_records(
+        records_path,
+        parallel_output,
+        input_root=sample,
+        max_workers=2,
+        parallel_enabled=True,
+    )
+
+    assert serial["status"] == "SUCCESS"
+    assert parallel["status"] == "SUCCESS"
+    assert parallel["parallel_enabled"] is True
+    assert parallel["max_workers"] == 2
+    assert parallel["written_files"] == serial["written_files"]
+
+    serial_files = sorted(path.relative_to(serial_output) for path in serial_output.rglob("*") if path.is_file())
+    parallel_files = sorted(path.relative_to(parallel_output) for path in parallel_output.rglob("*") if path.is_file())
+    assert parallel_files == serial_files
+
+
 def test_step1_output_validator_reports_full_modality_counts(tmp_path):
     output_root = tmp_path / "step1_results"
     for idx in range(25):

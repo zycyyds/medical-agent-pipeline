@@ -742,4 +742,6 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    from agent_1.main import main as standalone_step1_main
+
+    raise SystemExit(standalone_step1_main(sys.argv[1:]))
