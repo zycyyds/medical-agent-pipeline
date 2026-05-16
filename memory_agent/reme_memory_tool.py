@@ -11,12 +11,30 @@ from agentscope.tool import ToolResponse
 
 REME_MEMORY_ROOT = Path(__file__).parent / "reme_memory"
 STEP1_SCRIPT_CASES_PATH = REME_MEMORY_ROOT / "cases" / "step1_script_cases.jsonl"
+REME_CASE_SCHEMA_VERSION = 1
 MAX_SAMPLE_FILES = 20
 MAX_SCHEMA_FILES = 8
 
 
 def _json_response(payload: dict[str, Any]) -> ToolResponse:
     return ToolResponse(content=json.dumps(payload, ensure_ascii=False, sort_keys=True))
+
+
+def ensure_reme_memory_store() -> dict[str, Any]:
+    STEP1_SCRIPT_CASES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not STEP1_SCRIPT_CASES_PATH.exists():
+        STEP1_SCRIPT_CASES_PATH.write_text("", encoding="utf-8")
+    return {
+        "reme_memory_root": str(REME_MEMORY_ROOT),
+        "cases_dir": str(STEP1_SCRIPT_CASES_PATH.parent),
+        "step1_script_cases_path": str(STEP1_SCRIPT_CASES_PATH),
+        "storage_exists": STEP1_SCRIPT_CASES_PATH.exists(),
+    }
+
+
+def initialize_reme_memory_store() -> ToolResponse:
+    store = ensure_reme_memory_store()
+    return _json_response({"status": "OK", "backend": "jsonl_fallback", **store})
 
 
 def _normalize_suffix(path: Path) -> str:
@@ -145,7 +163,7 @@ def _load_cases() -> list[dict[str, Any]]:
 
 
 def _append_case(case: dict[str, Any]) -> None:
-    STEP1_SCRIPT_CASES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ensure_reme_memory_store()
     with STEP1_SCRIPT_CASES_PATH.open("a", encoding="utf-8") as handle:
         handle.write(_stable_json(case) + "\n")
 
@@ -166,6 +184,7 @@ def record_step1_script_case(case_payload: str | dict[str, Any]) -> ToolResponse
     input_profile = payload.get("input_profile")
     if not isinstance(input_profile, dict):
         input_profile = {}
+    input_profile_hash = str(input_profile.get("profile_hash") or "") or _sha256_text(_stable_json(input_profile))
 
     script_hash = ""
     script_size = 0
@@ -176,12 +195,13 @@ def record_step1_script_case(case_payload: str | dict[str, Any]) -> ToolResponse
 
     case_identity = {
         "memory_type": "step1_script_case",
-        "input_profile_hash": input_profile.get("profile_hash"),
+        "input_profile_hash": input_profile_hash,
         "script_path": str(script_path),
         "script_hash": script_hash,
     }
     case = {
         "case_id": "step1_" + _sha256_text(_stable_json(case_identity))[:16],
+        "schema_version": REME_CASE_SCHEMA_VERSION,
         "memory_type": "step1_script_case",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "input_profile": input_profile,
@@ -193,6 +213,9 @@ def record_step1_script_case(case_payload: str | dict[str, Any]) -> ToolResponse
         "backend": "jsonl_fallback",
         "script_exists": script_exists,
     }
+    existing = next((item for item in _load_cases() if item.get("case_id") == case["case_id"]), None)
+    if existing:
+        return _json_response({"status": "EXISTS", "case": existing})
     _append_case(case)
     return _json_response({"status": "RECORDED", "case": case})
 
@@ -275,6 +298,7 @@ def _real_reme_available() -> bool:
 
 
 def get_reme_memory_status() -> ToolResponse:
+    store = ensure_reme_memory_store()
     cases = [case for case in _load_cases() if case.get("memory_type") == "step1_script_case"]
     real_reme_available = _real_reme_available()
     return _json_response(
@@ -282,9 +306,7 @@ def get_reme_memory_status() -> ToolResponse:
             "status": "OK",
             "backend": "jsonl_fallback",
             "real_reme_available": real_reme_available,
-            "reme_memory_root": str(REME_MEMORY_ROOT),
-            "step1_script_cases_path": str(STEP1_SCRIPT_CASES_PATH),
             "case_count": len(cases),
-            "storage_exists": STEP1_SCRIPT_CASES_PATH.exists(),
+            **store,
         }
     )

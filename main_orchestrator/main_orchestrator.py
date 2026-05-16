@@ -10,10 +10,13 @@ from types import SimpleNamespace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATOR_DIR = PROJECT_ROOT / "main_orchestrator"
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-if str(ORCHESTRATOR_DIR) not in sys.path:
-    sys.path.insert(0, str(ORCHESTRATOR_DIR))
+AGENTS_DIR = ORCHESTRATOR_DIR / "agents"
+CORE_DIR = ORCHESTRATOR_DIR / "core"
+EXECUTION_DIR = ORCHESTRATOR_DIR / "execution"
+MEMORY_DIR = ORCHESTRATOR_DIR / "memory"
+for path in (PROJECT_ROOT, ORCHESTRATOR_DIR, AGENTS_DIR, CORE_DIR, EXECUTION_DIR, MEMORY_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 try:
     from agentscope.formatter import OpenAIChatFormatter

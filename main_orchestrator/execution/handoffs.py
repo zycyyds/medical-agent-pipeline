@@ -7,10 +7,13 @@ from typing import Any, Literal
 
 from agentscope.tool import ToolResponse
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ORCHESTRATOR_DIR = PROJECT_ROOT / "main_orchestrator"
+AGENTS_DIR = ORCHESTRATOR_DIR / "agents"
+CORE_DIR = ORCHESTRATOR_DIR / "core"
+EXECUTION_DIR = ORCHESTRATOR_DIR / "execution"
 STEP1_DIR = PROJECT_ROOT / "step-1"
-for path in (PROJECT_ROOT, ORCHESTRATOR_DIR, STEP1_DIR):
+for path in (PROJECT_ROOT, ORCHESTRATOR_DIR, AGENTS_DIR, CORE_DIR, EXECUTION_DIR, STEP1_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 

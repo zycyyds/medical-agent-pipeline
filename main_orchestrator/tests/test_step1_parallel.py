@@ -6,12 +6,15 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ORCHESTRATOR_DIR = PROJECT_ROOT / "main_orchestrator"
+STEP1_DIR = PROJECT_ROOT / "step-1"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 if str(ORCHESTRATOR_DIR) not in sys.path:
     sys.path.insert(0, str(ORCHESTRATOR_DIR))
+if str(STEP1_DIR) not in sys.path:
+    sys.path.insert(0, str(STEP1_DIR))
 
-from step1_parallel import build_records_parallel, run_reorganize_from_records, scan_source_files
+from step1_runtime_core import build_records_parallel, run_reorganize_from_records, scan_source_files
 from validators import validate_records, validate_step1_output
 
 

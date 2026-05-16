@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 from typing import Any
 
 from agentscope.agent import ReActAgent
 from agentscope.memory import InMemoryMemory
 from agentscope.tool import Toolkit, ToolResponse
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ORCHESTRATOR_DIR = PROJECT_ROOT / "main_orchestrator"
+AGENTS_DIR = ORCHESTRATOR_DIR / "agents"
+CORE_DIR = ORCHESTRATOR_DIR / "core"
+for path in (PROJECT_ROOT, ORCHESTRATOR_DIR, AGENTS_DIR, CORE_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from agent_runtime import (
     collect_tool_results,

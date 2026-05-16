@@ -1,8 +1,9 @@
 import asyncio
 import json
+import os
 from typing import Any
 
-from agentscope.model import OllamaChatModel
+from agentscope.model import OllamaChatModel, OpenAIChatModel
 from agentscope.tool import ToolResponse
 
 from memory_agent.core import (
@@ -20,7 +21,6 @@ MEMORY_BANK_PATH = config.get_memory_bank_path()
 LLM_MODEL = config.LLM_MODEL
 LLM_TEMPERATURE = config.LLM_TEMPERATURE
 LLM_SEED = config.LLM_SEED
-LLM_ENABLE_THINKING = config.LLM_ENABLE_THINKING
 
 _PLAYBOOK_INSTANCE: ACEPlaybookManager | None = None
 _CURRENT_TRACE_PAYLOAD: dict[str, Any] | None = None
@@ -28,15 +28,30 @@ _CURRENT_REFLECTION_PAYLOAD: dict[str, Any] | None = None
 
 
 def make_chat_model_factory(_agent_key: str = "memory_agent"):
-    return lambda: OllamaChatModel(
-        model_name=LLM_MODEL,
-        enable_thinking=LLM_ENABLE_THINKING,
-        options={
-            "temperature": LLM_TEMPERATURE,
-            "seed": LLM_SEED,
-            "num_predict": 4096,
-        },
-    )
+    def _factory():
+        api_key = os.environ.get("OPENAI_API_KEY") or config.LLM_API_KEY or None
+        base_url = os.environ.get("OPENAI_API_BASE") or config.LLM_BASE_URL
+        if api_key or base_url:
+            return OpenAIChatModel(
+                model_name=config.get_llm_model(),
+                api_key=api_key,
+                stream=False,
+                client_kwargs={"base_url": base_url or "https://api.openai.com/v1"},
+                generate_kwargs={
+                    "temperature": LLM_TEMPERATURE,
+                    "seed": LLM_SEED,
+                },
+            )
+        return OllamaChatModel(
+            model_name=config.get_llm_model(),
+            options={
+                "temperature": LLM_TEMPERATURE,
+                "seed": LLM_SEED,
+                "num_predict": 4096,
+            },
+        )
+
+    return _factory
 
 
 def _get_playbook() -> ACEPlaybookManager:
@@ -63,7 +78,6 @@ def _create_reflector() -> ACEReflector:
         model_name=LLM_MODEL,
         temperature=LLM_TEMPERATURE,
         seed=LLM_SEED,
-        enable_thinking=LLM_ENABLE_THINKING,
         model_factory=make_chat_model_factory("memory_agent"),
     )
 
@@ -73,7 +87,6 @@ def _create_curator() -> ACECurator:
         model_name=LLM_MODEL,
         temperature=LLM_TEMPERATURE,
         seed=LLM_SEED,
-        enable_thinking=LLM_ENABLE_THINKING,
         model_factory=make_chat_model_factory("memory_agent"),
     )
 

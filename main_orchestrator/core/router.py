@@ -22,6 +22,19 @@ def _path_contains(path: Path, *parts: str) -> bool:
     return all(part.lower() in normalized for part in parts)
 
 
+def _mentions_step1_only(lower: str) -> bool:
+    compact = re.sub(r"[\s_\-—–]+", "", lower)
+    mentions_step1 = (
+        "step1" in compact
+        or "第1步" in compact
+        or "第一步" in compact
+        or "步骤1" in compact
+    )
+    if not mentions_step1:
+        return False
+    return any(token in compact for token in ("只跑", "只运行", "只执行", "仅跑", "仅运行", "仅执行", "only"))
+
+
 def _trim_to_existing_path(token: str, project_root: Path) -> str | None:
     candidate_text = token.strip().strip("\"'“”‘’")
     if not candidate_text:
@@ -160,7 +173,7 @@ def route_task(user_input: str, project_root: str | Path | None = None) -> TaskS
             confidence=0.8,
         )
 
-    if "step1" in lower or "只跑step1" in lower or ("只跑" in lower and "1" in lower):
+    if _mentions_step1_only(lower):
         return TaskSpec(
             task_type=TaskType.STEP1_ONLY,
             entry_artifacts={"input_path": str(path)},

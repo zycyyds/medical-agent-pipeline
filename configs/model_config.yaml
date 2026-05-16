@@ -61,7 +61,6 @@ agents:
     model: "gpt-4.1-mini"
     temperature: 0.0
     seed: 666
-    enable_thinking: false
 
   main_orchestrator:  # 主链路编排智能体
     api_key: ""
@@ -69,4 +68,3 @@ agents:
     model: "gpt-4.1-mini"
     temperature: 0.0
     seed: 666
-    enable_thinking: true

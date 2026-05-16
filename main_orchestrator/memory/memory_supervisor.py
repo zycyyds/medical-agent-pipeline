@@ -1,5 +1,11 @@
 import json
 import os
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from agentscope.agent import ReActAgent
 from agentscope.formatter import OllamaChatFormatter, OpenAIChatFormatter
@@ -198,13 +204,10 @@ def _get_missing_required_tools(called_tools: set[str]) -> list[str]:
 
 
 def _memory_generate_kwargs() -> dict:
-    generate_kwargs = {
+    return {
         "temperature": config.LLM_TEMPERATURE,
         "seed": config.LLM_SEED,
     }
-    if config.LLM_ENABLE_THINKING is not None:
-        generate_kwargs["enable_thinking"] = bool(config.LLM_ENABLE_THINKING)
-    return generate_kwargs
 
 
 def _create_memory_model_and_formatter():
@@ -222,7 +225,6 @@ def _create_memory_model_and_formatter():
 
     model = OllamaChatModel(
         model_name=config.LLM_MODEL,
-        enable_thinking=config.LLM_ENABLE_THINKING,
         options={
             "temperature": config.LLM_TEMPERATURE,
             "seed": config.LLM_SEED,

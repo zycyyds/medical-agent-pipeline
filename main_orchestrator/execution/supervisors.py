@@ -4,15 +4,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ORCHESTRATOR_DIR = PROJECT_ROOT / "main_orchestrator"
+CORE_DIR = ORCHESTRATOR_DIR / "core"
+EXECUTION_DIR = ORCHESTRATOR_DIR / "execution"
 STEP1_DIR = PROJECT_ROOT / "step-1"
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-if str(ORCHESTRATOR_DIR) not in sys.path:
-    sys.path.insert(0, str(ORCHESTRATOR_DIR))
-if str(STEP1_DIR) not in sys.path:
-    sys.path.insert(0, str(STEP1_DIR))
+for path in (PROJECT_ROOT, ORCHESTRATOR_DIR, CORE_DIR, EXECUTION_DIR, STEP1_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 from contracts import WorkerResult, WorkerStatus  # noqa: E402
 from handoffs import run_step1_handoff  # noqa: E402

@@ -60,7 +60,10 @@ def test_create_memory_agent_uses_configured_openai_compatible_model(monkeypatch
     assert captured["model_kwargs"]["model_name"] == memory_supervisor_module.config.LLM_MODEL
     assert captured["model_kwargs"]["api_key"] == memory_supervisor_module.config.LLM_API_KEY
     assert captured["model_kwargs"]["client_kwargs"]["base_url"] == memory_supervisor_module.config.LLM_BASE_URL
-    assert captured["model_kwargs"]["generate_kwargs"]["enable_thinking"] is False
+    assert captured["model_kwargs"]["generate_kwargs"] == {
+        "temperature": memory_supervisor_module.config.LLM_TEMPERATURE,
+        "seed": memory_supervisor_module.config.LLM_SEED,
+    }
     assert isinstance(agent.formatter, FakeFormatter)
 
 
@@ -84,7 +87,7 @@ def test_create_memory_agent_can_fallback_to_ollama_model(monkeypatch):
     agent = memory_supervisor_module._create_memory_agent()
 
     assert captured["model_kwargs"]["model_name"] == memory_supervisor_module.config.LLM_MODEL
-    assert captured["model_kwargs"]["enable_thinking"] == memory_supervisor_module.config.LLM_ENABLE_THINKING
+    assert set(captured["model_kwargs"]) == {"model_name", "options"}
     assert isinstance(agent.formatter, FakeFormatter)
 
 

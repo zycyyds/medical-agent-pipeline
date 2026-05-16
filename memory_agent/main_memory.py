@@ -7,12 +7,19 @@ Memory Agent 独立交互入口
 """
 
 import asyncio
+import os
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import agentscope
 from agentscope.agent import ReActAgent, UserAgent
-from agentscope.formatter import OllamaChatFormatter
+from agentscope.formatter import OllamaChatFormatter, OpenAIChatFormatter
 from agentscope.message import Msg
-from agentscope.model import OllamaChatModel
+from agentscope.model import OllamaChatModel, OpenAIChatModel
 from agentscope.tool import Toolkit
 
 from memory_agent.config import config
@@ -32,15 +39,29 @@ from memory_agent.memory_tool import (
 async def main():
     agentscope.init(project="MemoryAgent", name="MemoryAgentStandalone")
 
-    model = OllamaChatModel(
-        model_name=config.LLM_MODEL,
-        enable_thinking=config.LLM_ENABLE_THINKING,
-        options={
-            "temperature": config.LLM_TEMPERATURE,
-            "seed": config.LLM_SEED,
-        },
-    )
-    formatter = OllamaChatFormatter()
+    api_key = os.environ.get("OPENAI_API_KEY") or config.LLM_API_KEY or None
+    base_url = os.environ.get("OPENAI_API_BASE") or config.LLM_BASE_URL
+    if api_key or base_url:
+        model = OpenAIChatModel(
+            model_name=config.get_llm_model(),
+            api_key=api_key,
+            stream=False,
+            client_kwargs={"base_url": base_url or "https://api.openai.com/v1"},
+            generate_kwargs={
+                "temperature": config.LLM_TEMPERATURE,
+                "seed": config.LLM_SEED,
+            },
+        )
+        formatter = OpenAIChatFormatter()
+    else:
+        model = OllamaChatModel(
+            model_name=config.get_llm_model(),
+            options={
+                "temperature": config.LLM_TEMPERATURE,
+                "seed": config.LLM_SEED,
+            },
+        )
+        formatter = OllamaChatFormatter()
 
     toolkit = Toolkit()
     toolkit.register_tool_function(playbook_get_context)

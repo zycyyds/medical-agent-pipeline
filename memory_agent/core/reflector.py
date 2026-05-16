@@ -499,14 +499,12 @@ class ACEReflector:
         model_name: str,
         temperature: float,
         seed: int,
-        enable_thinking: bool | None = False,
         model_cls=OpenAIChatModel,
         model_factory: Callable[[], Any] | None = None,
     ):
         self.model_name = model_name
         self.temperature = temperature
         self.seed = seed
-        self.enable_thinking = enable_thinking
         self.model_cls = model_cls
         self.model_factory = model_factory
         self.last_debug_artifact: dict[str, str] | None = None
@@ -516,7 +514,6 @@ class ACEReflector:
             return self.model_factory()
         return self.model_cls(
             model_name=self.model_name,
-            enable_thinking=self.enable_thinking,
             options={
                 "temperature": self.temperature,
                 "seed": self.seed,

@@ -12,7 +12,8 @@ from agentscope.tool import Toolkit
 STEP1_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = STEP1_DIR.parent
 ORCHESTRATOR_DIR = PROJECT_ROOT / "main_orchestrator"
-for path in (PROJECT_ROOT, ORCHESTRATOR_DIR, STEP1_DIR):
+AGENTS_DIR = ORCHESTRATOR_DIR / "agents"
+for path in (PROJECT_ROOT, ORCHESTRATOR_DIR, AGENTS_DIR, STEP1_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 

@@ -11,7 +11,7 @@ from agentscope.message import Msg, TextBlock
 from agentscope.model import OpenAIChatModel
 from agentscope.tool import ToolResponse
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -102,8 +102,6 @@ def create_openai_model_and_formatter(agent_key: str, default_model: str):
         generate_kwargs["temperature"] = cfg.get("temperature")
     if "seed" in cfg:
         generate_kwargs["seed"] = cfg.get("seed")
-    if cfg.get("enable_thinking") is not None:
-        generate_kwargs["enable_thinking"] = bool(cfg.get("enable_thinking"))
     model = OpenAIChatModel(
         model_name=resolve_model_name(agent_key, default_model),
         api_key=api_key,

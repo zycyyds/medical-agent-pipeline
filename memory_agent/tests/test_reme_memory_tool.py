@@ -38,6 +38,15 @@ def test_build_step1_input_profile_for_directory_and_single_file(tmp_path):
     assert single_profile["suffix_counts"] == {".csv": 1}
 
 
+def test_initialize_reme_memory_store_creates_jsonl_store(isolated_case_store):
+    response = _payload(tool.initialize_reme_memory_store())
+
+    assert response["status"] == "OK"
+    assert response["backend"] == "jsonl_fallback"
+    assert isolated_case_store.is_file()
+    assert response["storage_exists"] is True
+
+
 def test_build_step1_input_profile_for_missing_path(tmp_path):
     profile = _payload(tool.build_step1_input_profile(str(tmp_path / "missing")))
 
@@ -68,6 +77,7 @@ def test_record_step1_script_case_writes_metadata_without_script_body(tmp_path, 
 
     assert response["status"] == "RECORDED"
     assert response["case"]["memory_type"] == "step1_script_case"
+    assert response["case"]["schema_version"] == tool.REME_CASE_SCHEMA_VERSION
     assert response["case"]["script_hash"]
     assert response["case"]["script_size"] == script_path.stat().st_size
     assert "do not store full body" not in json.dumps(response, ensure_ascii=False)
@@ -76,6 +86,24 @@ def test_record_step1_script_case_writes_metadata_without_script_body(tmp_path, 
     assert len(stored) == 1
     assert stored[0]["case_id"] == response["case"]["case_id"]
     assert "script_content" not in stored[0]
+
+
+def test_record_step1_script_case_is_idempotent_for_same_case(tmp_path, isolated_case_store):
+    script_path = tmp_path / "script.py"
+    script_path.write_text("print('ok')\n", encoding="utf-8")
+    payload = {
+        "input_profile": {"profile_hash": "same", "path_type": "file", "file_count": 1, "suffix_counts": {".csv": 1}},
+        "script_path": str(script_path),
+        "summary": "same case",
+    }
+
+    first = _payload(tool.record_step1_script_case(payload))
+    second = _payload(tool.record_step1_script_case(payload))
+
+    assert first["status"] == "RECORDED"
+    assert second["status"] == "EXISTS"
+    assert first["case"]["case_id"] == second["case"]["case_id"]
+    assert len(isolated_case_store.read_text(encoding="utf-8").splitlines()) == 1
 
 
 def test_retrieve_step1_script_case_ranks_by_suffix_and_file_count(tmp_path, isolated_case_store):

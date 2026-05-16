@@ -77,6 +77,19 @@ def test_route_natural_language_step1_input(tmp_path):
     assert spec.entry_artifacts["input_path"] == str(sample.resolve())
 
 
+def test_route_natural_language_step1_hyphen_input(tmp_path):
+    sample = tmp_path / "mimic-mini"
+    sample.mkdir()
+
+    spec = orchestrator_module.route_task(
+        f"输入{sample}这个数据集，且只运行step-1",
+        project_root=tmp_path,
+    )
+
+    assert spec.task_type == TaskType.STEP1_ONLY
+    assert spec.entry_artifacts["input_path"] == str(sample.resolve())
+
+
 def test_route_extracts_absolute_path_from_chinese_sentence(tmp_path):
     sample = tmp_path / "mimic-mini"
     sample.mkdir()
@@ -143,16 +156,33 @@ def test_state_machine_step1_only_does_not_run_later_steps():
     assert calls == [("step1", "/tmp/rawdata")]
 
 
-def test_orchestrator_direct_handoff_preserves_input_path(monkeypatch, tmp_path):
-    calls = []
+def test_orchestrator_agent_uses_tool_result_instead_of_direct_handoff(monkeypatch, tmp_path):
+    created = []
     sample = tmp_path / "mimic-mini"
     sample.mkdir()
 
-    async def fake_handoff(**kwargs):
-        calls.append(kwargs)
-        return WorkerResult.success("step1 ok", artifacts={"records_count": 1, "output_file_count": 1})
+    class FakeAgent:
+        async def __call__(self, _msg):
+            class FakeResponse:
+                def get_text_content(self):
+                    return ""
 
-    monkeypatch.setattr(orchestrator_agent_module, "run_step1_handoff", fake_handoff)
+            return FakeResponse()
+
+    def fake_create_agent(task_spec):
+        created.append(task_spec)
+        return FakeAgent()
+
+    async def fake_collect_tool_results(_agent):
+        return {
+            "handoff_step1_from_task_spec_tool": [
+                WorkerResult.success("step1 ok", artifacts={"records_count": 1, "output_file_count": 1}).to_dict()
+            ]
+        }
+
+    monkeypatch.setattr(orchestrator_agent_module, "has_model_credentials", lambda _agent_key: True)
+    monkeypatch.setattr(orchestrator_agent_module, "create_orchestrator_agent", fake_create_agent)
+    monkeypatch.setattr(orchestrator_agent_module, "collect_tool_results", fake_collect_tool_results)
     spec = TaskSpec(
         task_type=TaskType.STEP1_ONLY,
         entry_artifacts={"input_path": str(sample)},
@@ -162,8 +192,16 @@ def test_orchestrator_direct_handoff_preserves_input_path(monkeypatch, tmp_path)
     result = asyncio.run(orchestrator_agent_module.run_with_orchestrator_agent(spec, enable_memory_agent=False))
 
     assert result.status == WorkerStatus.SUCCESS
-    assert calls[0]["task_type"] == "step1_only"
-    assert calls[0]["input_path"] == str(sample)
+    assert created == [spec]
+
+
+def test_orchestrator_step1_missing_input_needs_repair():
+    spec = TaskSpec(task_type=TaskType.STEP1_ONLY, entry_artifacts={}, resume_from_step="step1")
+
+    result = asyncio.run(orchestrator_agent_module.run_with_orchestrator_agent(spec, enable_memory_agent=False))
+
+    assert result.status == WorkerStatus.NEEDS_REPAIR
+    assert "input_path" in " ".join(result.repair_ticket.validator_errors)
 
 
 def test_step1_supervisor_delegates_to_handoff(monkeypatch, tmp_path):

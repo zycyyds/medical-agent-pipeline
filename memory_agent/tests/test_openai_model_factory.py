@@ -1,4 +1,5 @@
 import sys
+import inspect
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -37,12 +38,12 @@ def test_memory_agent_model_falls_back_to_config_when_env_missing(monkeypatch):
 
 
 def test_reflector_defaults_to_openai_model_class():
-    assert ACEReflector.__init__.__defaults__[1].__name__ == "OpenAIChatModel"
+    assert inspect.signature(ACEReflector.__init__).parameters["model_cls"].default.__name__ == "OpenAIChatModel"
 
 
 
 def test_curator_defaults_to_openai_model_class():
-    assert ACECurator.__init__.__defaults__[1].__name__ == "OpenAIChatModel"
+    assert inspect.signature(ACECurator.__init__).parameters["model_cls"].default.__name__ == "OpenAIChatModel"
 
 
 
