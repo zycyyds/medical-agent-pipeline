@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,15 +14,10 @@ import pandas as pd
 
 STEP1_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = STEP1_DIR.parent
-AGENT1_DIR = PROJECT_ROOT / "agent_1"
 if str(STEP1_DIR) not in sys.path:
     sys.path.insert(0, str(STEP1_DIR))
-if str(AGENT1_DIR) not in sys.path:
-    sys.path.insert(0, str(AGENT1_DIR))
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-from codegen_tools import extract_patient_id  # noqa: E402
 
 
 TABULAR_SUFFIXES = {".csv", ".xls", ".xlsx", ".tsv"}
@@ -29,6 +25,9 @@ VISUAL_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".pdf"}
 SUPPORTED_SUFFIXES = TABULAR_SUFFIXES | VISUAL_SUFFIXES
 EXCLUDED_DIR_NAMES = {"__pycache__", "reorganized_output"}
 EXCLUDED_FILE_NAMES = {".DS_Store"}
+PATIENT_ID_PATTERN = re.compile(r"patient[-_ ]?(\d+)", re.IGNORECASE)
+PATIENT_DIR_PATTERN = re.compile(r"^p(\d+)$", re.IGNORECASE)
+NUMERIC_ID_PATTERN = re.compile(r"(?<!\d)(\d{4,})(?:\(\d+\))?(?!\d)")
 ProgressCallback = Callable[[str, int, int], None]
 EmitCallback = Callable[[str], None]
 
@@ -58,6 +57,13 @@ class TableSplitPatch:
     id_column: str | None
     evidence: str
     error: str = ""
+
+
+@dataclass(frozen=True)
+class ValidatorResult:
+    passed: bool
+    issues: list[str]
+    details: dict[str, Any]
 
 
 class TerminalProgress:
@@ -113,6 +119,42 @@ def is_step1_parallel_enabled() -> bool:
 
 def is_step1_reorganize_parallel_enabled() -> bool:
     return _env_bool("STEP1_REORGANIZE_PARALLEL_ENABLED", True)
+
+
+def _match_patient_id(text: str) -> str | None:
+    match = PATIENT_ID_PATTERN.search(text or "")
+    if not match:
+        return None
+    return f"patient-{match.group(1)}"
+
+
+def extract_patient_id(source_path: str, content_text: str = "") -> str | None:
+    path = Path(source_path or "")
+    for part in path.parts:
+        patient_dir_match = PATIENT_DIR_PATTERN.fullmatch(str(part))
+        if patient_dir_match:
+            return patient_dir_match.group(1)
+
+    path_match = _match_patient_id(source_path)
+    if path_match:
+        return path_match
+
+    numeric_name_match = NUMERIC_ID_PATTERN.search(path.name)
+    if numeric_name_match:
+        return numeric_name_match.group(1)
+
+    numeric_path_match = NUMERIC_ID_PATTERN.search(source_path or "")
+    if numeric_path_match:
+        return numeric_path_match.group(1)
+
+    content_match = _match_patient_id(content_text)
+    if content_match:
+        return content_match
+
+    numeric_content_match = NUMERIC_ID_PATTERN.search(content_text or "")
+    if numeric_content_match:
+        return numeric_content_match.group(1)
+    return None
 
 
 def resolve_path(path: str | Path) -> Path:
@@ -261,7 +303,7 @@ def _infer_doclayout_for_visual_tasks(
                 progress("DocLayout disabled fallback", index, total)
         return patches
     try:
-        from layout_analysis_tool import infer_and_save_layout
+        from agent_1.layout_analysis_tool import infer_and_save_layout
 
         if emit:
             emit(f"[Step1][Tool] DocLayout-YOLO 开始识别图片/PDF文件: {len(tasks)} 个")
@@ -601,6 +643,119 @@ def load_records(records_path: str | Path) -> list[dict[str, Any]]:
     if not isinstance(parsed, list):
         raise ValueError("records.json 顶层必须是 list")
     return [item for item in parsed if isinstance(item, dict)]
+
+
+def validate_records(
+    records_path: str | Path,
+    expected_count: int | None = None,
+) -> ValidatorResult:
+    path = Path(records_path)
+    issues: list[str] = []
+    try:
+        records = load_records(path)
+    except FileNotFoundError:
+        records = []
+        issues.append(f"records.json 不存在: {path}")
+    except json.JSONDecodeError as exc:
+        records = []
+        issues.append(f"records.json 不是合法 JSON: {exc}")
+    except ValueError as exc:
+        records = []
+        issues.append(str(exc))
+
+    seen_source_paths: set[str] = set()
+    modality_counts: dict[str, int] = {}
+    status_counts: dict[str, int] = {}
+    split_tables = 0
+
+    if expected_count is not None and not issues and len(records) != expected_count:
+        issues.append(f"records 数量不匹配: records={len(records)}, expected={expected_count}")
+
+    for idx, record in enumerate(records):
+        source_path = str(record.get("source_path") or "").strip()
+        source_name = str(record.get("source_name") or "").strip()
+        observations = record.get("observations")
+        if not source_path:
+            issues.append(f"record[{idx}] 缺少 source_path")
+        if not source_name:
+            issues.append(f"record[{idx}] 缺少 source_name")
+        if source_path in seen_source_paths:
+            issues.append(f"重复 source_path: {source_path}")
+        seen_source_paths.add(source_path)
+        if observations is None or not isinstance(observations, dict):
+            issues.append(f"record[{idx}] 缺少 observations 对象")
+            continue
+        modality = str(observations.get("modality") or "").strip()
+        if not modality:
+            issues.append(f"record[{idx}] 缺少 observations.modality")
+        else:
+            modality_counts[modality] = modality_counts.get(modality, 0) + 1
+        status = str(observations.get("status") or "ready").strip()
+        if status:
+            status_counts[status] = status_counts.get(status, 0) + 1
+        if observations.get("should_split") and not observations.get("id_column"):
+            issues.append(f"record[{idx}] should_split=true 但缺少 id_column")
+        if observations.get("should_split"):
+            split_tables += 1
+
+    return ValidatorResult(
+        passed=not issues,
+        issues=sorted(set(issues)),
+        details={
+            "records_path": str(path),
+            "records_count": len(records),
+            "expected_count": expected_count,
+            "modality_counts": modality_counts,
+            "status_counts": status_counts,
+            "processable_records": len(records) - status_counts.get("unsupported", 0),
+            "unsupported_records": status_counts.get("unsupported", 0),
+            "split_tables": split_tables,
+        },
+    )
+
+
+def validate_step1_output(output_root: str | Path, expected_min_files: int = 1) -> ValidatorResult:
+    root = Path(output_root)
+    issues: list[str] = []
+    modality_counts: dict[str, int] = {}
+    sample_modality_counts: dict[str, int] = {}
+    sample_paths: list[str] = []
+
+    if not root.is_dir():
+        return ValidatorResult(
+            passed=False,
+            issues=[f"Step1 输出目录不存在: {root}"],
+            details={"output_root": str(root), "output_file_count": 0},
+        )
+
+    files = [item for item in sorted(root.rglob("*")) if item.is_file() and "_meta" not in item.parts]
+    if len(files) < expected_min_files:
+        issues.append(f"Step1 输出文件数不足: output_files={len(files)}, expected_min={expected_min_files}")
+
+    for index, file_path in enumerate(files):
+        rel = file_path.relative_to(root)
+        if index < 20:
+            sample_paths.append(str(rel))
+        if len(rel.parts) < 3:
+            issues.append(f"输出路径层级不足: {rel}")
+        elif len(rel.parts) >= 2:
+            modality = rel.parts[1]
+            modality_counts[modality] = modality_counts.get(modality, 0) + 1
+            if index < 20:
+                sample_modality_counts[modality] = sample_modality_counts.get(modality, 0) + 1
+
+    return ValidatorResult(
+        passed=not issues,
+        issues=sorted(set(issues)),
+        details={
+            "output_root": str(root),
+            "output_file_count": len(files),
+            "expected_min_files": expected_min_files,
+            "modality_counts": modality_counts,
+            "sample_modality_counts": sample_modality_counts,
+            "sample_paths": sample_paths,
+        },
+    )
 
 
 def infer_input_root(records: list[dict[str, Any]]) -> Path:

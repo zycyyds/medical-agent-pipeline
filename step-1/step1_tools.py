@@ -7,31 +7,30 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from agentscope.message import TextBlock
 from agentscope.tool import ToolResponse, Toolkit
 
 STEP1_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = STEP1_DIR.parent
-ORCHESTRATOR_DIR = PROJECT_ROOT / "main_orchestrator"
 if str(STEP1_DIR) in sys.path:
     sys.path.remove(str(STEP1_DIR))
 sys.path.insert(0, str(STEP1_DIR))
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-if str(ORCHESTRATOR_DIR) not in sys.path:
-    sys.path.insert(0, str(ORCHESTRATOR_DIR))
 
 from step1_runtime import (  # noqa: E402
     TerminalProgress,
     build_records_parallel,
     run_reorganize_from_records,
     scan_source_files,
+    validate_records,
+    validate_step1_output,
     write_generated_reorganizer,
 )
-from validators import validate_records, validate_step1_output  # noqa: E402
 
 
 def _json_response(payload: dict[str, Any]) -> ToolResponse:
-    return ToolResponse(content=json.dumps(payload, ensure_ascii=False, indent=2))
+    return ToolResponse(content=[TextBlock(type="text", text=json.dumps(payload, ensure_ascii=False, indent=2))])
 
 
 def _progress_enabled() -> bool:
@@ -43,20 +42,24 @@ def _new_progress() -> TerminalProgress:
     return TerminalProgress(enabled=_progress_enabled())
 
 
-def scan_source_files_tool(input_path: str) -> ToolResponse:
+def scan_source_files_tool(input_path: str, include_tasks: bool = False, max_sample_tasks: int = 20) -> ToolResponse:
     progress = _new_progress()
     progress.emit(f"[Step1][Tool] scan_source_files_tool 开始: {input_path}")
     tasks = [asdict(task) for task in scan_source_files(input_path)]
     progress.emit(f"[Step1][Tool] scan_source_files_tool 完成: source_files={len(tasks)}")
+    sample_size = max(0, int(max_sample_tasks or 0))
+    artifacts = {
+        "input_path": str(input_path),
+        "source_files": len(tasks),
+        "sample_tasks": tasks[:sample_size],
+    }
+    if include_tasks:
+        artifacts["tasks"] = tasks
     return _json_response(
         {
             "status": "SUCCESS",
             "summary": f"已扫描 {len(tasks)} 个文件。",
-            "artifacts": {
-                "input_path": str(input_path),
-                "tasks": tasks,
-                "source_files": len(tasks),
-            },
+            "artifacts": artifacts,
             "issues": [],
         }
     )

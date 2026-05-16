@@ -1,9 +1,10 @@
 import json
+import os
 
 from agentscope.agent import ReActAgent
-from agentscope.formatter import OllamaChatFormatter
+from agentscope.formatter import OllamaChatFormatter, OpenAIChatFormatter
 from agentscope.message import Msg
-from agentscope.model import OllamaChatModel
+from agentscope.model import OllamaChatModel, OpenAIChatModel
 from agentscope.tool import Toolkit
 
 from memory_agent.config import config
@@ -57,6 +58,36 @@ def _has_visible_answer_content(content) -> bool:
                 return True
         return False
     return bool(str(content).strip())
+
+
+def _strip_thinking_from_msg(msg: Msg) -> Msg:
+    content = getattr(msg, "content", None)
+    if not isinstance(content, list):
+        return msg
+    content_blocks = [
+        block for block in msg.get_content_blocks() if str(block.get("type") or "") != "thinking"
+    ]
+    sanitized_msg = Msg(
+        name=msg.name,
+        content=content_blocks,
+        role=msg.role,
+        metadata=msg.metadata,
+        timestamp=msg.timestamp,
+        invocation_id=msg.invocation_id,
+    )
+    sanitized_msg.id = msg.id
+    return sanitized_msg
+
+
+def register_no_thinking_print_hook(agent: ReActAgent) -> ReActAgent:
+    def _hook(_agent: ReActAgent, kwargs: dict):
+        msg = kwargs.get("msg")
+        if isinstance(msg, Msg):
+            kwargs["msg"] = _strip_thinking_from_msg(msg)
+        return kwargs
+
+    agent.register_instance_hook("pre_print", "strip_thinking_for_console", _hook)
+    return agent
 
 
 def _parse_tool_result_output(output) -> dict | None:
@@ -166,6 +197,40 @@ def _get_missing_required_tools(called_tools: set[str]) -> list[str]:
     return sorted(_REQUIRED_MEMORY_TOOLS - called_tools)
 
 
+def _memory_generate_kwargs() -> dict:
+    generate_kwargs = {
+        "temperature": config.LLM_TEMPERATURE,
+        "seed": config.LLM_SEED,
+    }
+    if config.LLM_ENABLE_THINKING is not None:
+        generate_kwargs["enable_thinking"] = bool(config.LLM_ENABLE_THINKING)
+    return generate_kwargs
+
+
+def _create_memory_model_and_formatter():
+    api_key = os.environ.get("OPENAI_API_KEY") or config.LLM_API_KEY or None
+    base_url = os.environ.get("OPENAI_API_BASE") or config.LLM_BASE_URL
+    if api_key or base_url:
+        model = OpenAIChatModel(
+            model_name=config.LLM_MODEL,
+            api_key=api_key,
+            stream=False,
+            client_kwargs={"base_url": base_url or "https://api.openai.com/v1"},
+            generate_kwargs=_memory_generate_kwargs(),
+        )
+        return model, OpenAIChatFormatter()
+
+    model = OllamaChatModel(
+        model_name=config.LLM_MODEL,
+        enable_thinking=config.LLM_ENABLE_THINKING,
+        options={
+            "temperature": config.LLM_TEMPERATURE,
+            "seed": config.LLM_SEED,
+        },
+    )
+    return model, OllamaChatFormatter()
+
+
 async def _run_memory_agent_with_required_first_tool(
     agent: ReActAgent,
     msg: Msg,
@@ -225,23 +290,13 @@ async def _run_memory_agent_with_required_first_tool(
 
 
 def _create_memory_agent() -> ReActAgent:
-    from step_wrappers import register_no_thinking_print_hook
-
     toolkit = Toolkit()
     toolkit.register_tool_function(reflector_analyze)
     toolkit.register_tool_function(update_strategy_count)
     toolkit.register_tool_function(curator_apply_reflection)
     toolkit.register_tool_function(curator_grow_and_refine)
 
-    model = OllamaChatModel(
-        model_name=config.LLM_MODEL,
-        enable_thinking=config.LLM_ENABLE_THINKING,
-        options={
-            "temperature": config.LLM_TEMPERATURE,
-            "seed": config.LLM_SEED,
-        },
-    )
-    formatter = OllamaChatFormatter()
+    model, formatter = _create_memory_model_and_formatter()
 
     sys_prompt = f"""你是一个全局反思与记忆智能体 (Memory Supervisor)，负责 ACE 架构中的策略本 (Playbook) 维护。
 你全程使用中文。

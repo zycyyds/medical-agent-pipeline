@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -45,15 +46,16 @@ def _worker_result_to_dict(result) -> dict[str, Any]:
 
 
 async def run(args: argparse.Namespace) -> dict[str, Any]:
+    input_path = str(Path(args.input_path).expanduser().resolve())
     supervisor = Step1Supervisor(
-        records_path=args.records_path,
-        output_root=args.output_root,
-        generated_script_path=args.script_path,
+        records_path=Path(args.records_path).expanduser().resolve(),
+        output_root=Path(args.output_root).expanduser().resolve(),
+        generated_script_path=Path(args.script_path).expanduser().resolve(),
     )
     if args.task_type == "resume_from_records":
-        result = await supervisor.run_from_records(args.input_path)
+        result = await supervisor.run_from_records(input_path)
     else:
-        result = await supervisor.run_from_input(args.input_path)
+        result = await supervisor.run_from_input(input_path)
     return {
         "status": result.status.value,
         "task_type": args.task_type,
@@ -63,6 +65,8 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.json:
+        os.environ["STEP1_PROGRESS_ENABLED"] = "false"
     payload = asyncio.run(run(args))
     if args.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))

@@ -16,6 +16,8 @@ class Config:
     MEMORY_BANK_PATH: Path = BASE_DIR / "memory_bank.json"
 
     # LLM 配置 (从全局配置加载)
+    LLM_API_KEY: str = ""
+    LLM_BASE_URL: str = ""
     LLM_MODEL: str = "qwen3:8b"
     LLM_TEMPERATURE: float = 0.0
     LLM_SEED: int = 666
@@ -42,6 +44,8 @@ class Config:
             
             agent_cfg = get_agent_config("memory_agent")
             if agent_cfg:
+                self.LLM_API_KEY = agent_cfg.get("api_key", self.LLM_API_KEY)
+                self.LLM_BASE_URL = agent_cfg.get("base_url") or agent_cfg.get("api_base") or self.LLM_BASE_URL
                 self.LLM_MODEL = agent_cfg.get("model_name", self.LLM_MODEL)
                 self.LLM_TEMPERATURE = agent_cfg.get("temperature", self.LLM_TEMPERATURE)
                 self.LLM_SEED = agent_cfg.get("seed", self.LLM_SEED)

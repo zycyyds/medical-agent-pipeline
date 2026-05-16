@@ -20,6 +20,12 @@ from step1_tools_core import (
 )
 
 
+def _tool_json(response) -> dict:
+    assert isinstance(response.content, list)
+    assert response.content[0]["type"] == "text"
+    return json.loads(response.content[0]["text"])
+
+
 def _build_sample(root: Path) -> None:
     image_dir = root / "images" / "p10000032" / "s1"
     image_dir.mkdir(parents=True)
@@ -40,11 +46,12 @@ def test_scan_source_files_tool_returns_serialized_tasks(tmp_path):
     sample.mkdir()
     _build_sample(sample)
 
-    payload = json.loads(str(scan_source_files_tool(str(sample)).content))
+    payload = _tool_json(scan_source_files_tool(str(sample), include_tasks=True))
 
     assert payload["status"] == "SUCCESS"
     assert payload["artifacts"]["source_files"] == 3
     assert len(payload["artifacts"]["tasks"]) == 3
+    assert len(payload["artifacts"]["sample_tasks"]) == 3
 
 
 def test_step1_tools_build_validate_and_reorganize(tmp_path, monkeypatch):
@@ -55,14 +62,12 @@ def test_step1_tools_build_validate_and_reorganize(tmp_path, monkeypatch):
     records_path = tmp_path / "records.json"
     output_root = tmp_path / "step1_results"
 
-    build_payload = json.loads(
-        str(build_records_parallel_tool(str(sample), str(records_path), max_workers=2, parallel_enabled=True).content)
+    build_payload = _tool_json(
+        build_records_parallel_tool(str(sample), str(records_path), max_workers=2, parallel_enabled=True)
     )
-    validate_payload = json.loads(str(validate_records_tool(str(records_path), expected_count=3).content))
-    run_payload = json.loads(
-        str(run_reorganize_from_records_tool(str(records_path), str(output_root), input_root=str(sample)).content)
-    )
-    output_payload = json.loads(str(validate_step1_output_tool(str(output_root), expected_min_files=2).content))
+    validate_payload = _tool_json(validate_records_tool(str(records_path), expected_count=3))
+    run_payload = _tool_json(run_reorganize_from_records_tool(str(records_path), str(output_root), input_root=str(sample)))
+    output_payload = _tool_json(validate_step1_output_tool(str(output_root), expected_min_files=2))
 
     assert build_payload["status"] == "SUCCESS"
     assert build_payload["artifacts"]["records_count"] == 3

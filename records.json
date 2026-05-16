@@ -1,0 +1,631 @@
+[
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/cxr_sampled_with_reports.csv",
+    "source_name": "cxr_sampled_with_reports.csv",
+    "patient_id": null,
+    "relative_path": "cxr_sampled_with_reports.csv",
+    "file_info": {
+      "suffix": ".csv",
+      "size_bytes": 17612,
+      "processable": true
+    },
+    "observations": {
+      "modality": "table",
+      "should_split": true,
+      "id_column": "subject_id",
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "tabular suffix",
+      "table_split": "detected id column"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10000032/s50414267/02aa804e-bde0afdd-112c0b34-7bc16630-4e384014.jpg",
+    "source_name": "02aa804e-bde0afdd-112c0b34-7bc16630-4e384014.jpg",
+    "patient_id": "10000032",
+    "relative_path": "images/p10000032/s50414267/02aa804e-bde0afdd-112c0b34-7bc16630-4e384014.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1430084,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10000032/s53911762/68b5c4b1-227d0485-9cc38c3f-7b84ab51-4b472714.jpg",
+    "source_name": "68b5c4b1-227d0485-9cc38c3f-7b84ab51-4b472714.jpg",
+    "patient_id": "10000032",
+    "relative_path": "images/p10000032/s53911762/68b5c4b1-227d0485-9cc38c3f-7b84ab51-4b472714.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1400833,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10000032/s53911762/fffabebf-74fd3a1f-673b6b41-96ec0ac9-2ab69818.jpg",
+    "source_name": "fffabebf-74fd3a1f-673b6b41-96ec0ac9-2ab69818.jpg",
+    "patient_id": "10000032",
+    "relative_path": "images/p10000032/s53911762/fffabebf-74fd3a1f-673b6b41-96ec0ac9-2ab69818.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1163942,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10000764/s57375967/096052b7-d256dc40-453a102b-fa7d01c6-1b22c6b4.jpg",
+    "source_name": "096052b7-d256dc40-453a102b-fa7d01c6-1b22c6b4.jpg",
+    "patient_id": "10000764",
+    "relative_path": "images/p10000764/s57375967/096052b7-d256dc40-453a102b-fa7d01c6-1b22c6b4.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1707658,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10000898/s50771383/2a280266-c8bae121-54d75383-cac046f4-ca37aa16.jpg",
+    "source_name": "2a280266-c8bae121-54d75383-cac046f4-ca37aa16.jpg",
+    "patient_id": "10000898",
+    "relative_path": "images/p10000898/s50771383/2a280266-c8bae121-54d75383-cac046f4-ca37aa16.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1779742,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10000898/s54205396/b75df1bd-0f22d631-52d73526-2ae7b85a-d843b39d.jpg",
+    "source_name": "b75df1bd-0f22d631-52d73526-2ae7b85a-d843b39d.jpg",
+    "patient_id": "10000898",
+    "relative_path": "images/p10000898/s54205396/b75df1bd-0f22d631-52d73526-2ae7b85a-d843b39d.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 2244882,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10000935/s51178377/9b314ad7-fbcb0422-6db62dfc-732858d0-a5527d8b.jpg",
+    "source_name": "9b314ad7-fbcb0422-6db62dfc-732858d0-a5527d8b.jpg",
+    "patient_id": "10000935",
+    "relative_path": "images/p10000935/s51178377/9b314ad7-fbcb0422-6db62dfc-732858d0-a5527d8b.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1054830,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10000935/s56522600/f1adcae3-2921c0a8-5d9652f9-4191ecd7-f2a96f35.jpg",
+    "source_name": "f1adcae3-2921c0a8-5d9652f9-4191ecd7-f2a96f35.jpg",
+    "patient_id": "10000935",
+    "relative_path": "images/p10000935/s56522600/f1adcae3-2921c0a8-5d9652f9-4191ecd7-f2a96f35.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 997364,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10000980/s54935705/6ad819bb-bae74eb9-7b663e90-b8deabd7-57f8054a.jpg",
+    "source_name": "6ad819bb-bae74eb9-7b663e90-b8deabd7-57f8054a.jpg",
+    "patient_id": "10000980",
+    "relative_path": "images/p10000980/s54935705/6ad819bb-bae74eb9-7b663e90-b8deabd7-57f8054a.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1600800,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10000980/s54980801/a75a1fbe-802065ad-717eb7c1-e2ce3552-646276a6.jpg",
+    "source_name": "a75a1fbe-802065ad-717eb7c1-e2ce3552-646276a6.jpg",
+    "patient_id": "10000980",
+    "relative_path": "images/p10000980/s54980801/a75a1fbe-802065ad-717eb7c1-e2ce3552-646276a6.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1925737,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10000980/s58636672/c7526473-7b7214ee-a5d58d12-29d1f67f-9f4edf00.jpg",
+    "source_name": "c7526473-7b7214ee-a5d58d12-29d1f67f-9f4edf00.jpg",
+    "patient_id": "10000980",
+    "relative_path": "images/p10000980/s58636672/c7526473-7b7214ee-a5d58d12-29d1f67f-9f4edf00.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1241021,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10001038/s58224503/28fad2ac-d6001216-b4f72c5b-2d4d452e-17b6c9a5.jpg",
+    "source_name": "28fad2ac-d6001216-b4f72c5b-2d4d452e-17b6c9a5.jpg",
+    "patient_id": "10001038",
+    "relative_path": "images/p10001038/s58224503/28fad2ac-d6001216-b4f72c5b-2d4d452e-17b6c9a5.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 2107025,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10001038/s58224503/5cae71aa-99bb4662-41ef629e-7e89308c-5831ff9c.jpg",
+    "source_name": "5cae71aa-99bb4662-41ef629e-7e89308c-5831ff9c.jpg",
+    "patient_id": "10001038",
+    "relative_path": "images/p10001038/s58224503/5cae71aa-99bb4662-41ef629e-7e89308c-5831ff9c.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1579163,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10001122/s53957785/07b9ddda-9a4a1e1a-4495463d-4c77d947-ed368713.jpg",
+    "source_name": "07b9ddda-9a4a1e1a-4495463d-4c77d947-ed368713.jpg",
+    "patient_id": "10001122",
+    "relative_path": "images/p10001122/s53957785/07b9ddda-9a4a1e1a-4495463d-4c77d947-ed368713.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1462243,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10001176/s53186264/1fe73f8e-036bd24e-4578c891-33c1746e-864884a7.jpg",
+    "source_name": "1fe73f8e-036bd24e-4578c891-33c1746e-864884a7.jpg",
+    "patient_id": "10001176",
+    "relative_path": "images/p10001176/s53186264/1fe73f8e-036bd24e-4578c891-33c1746e-864884a7.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1891785,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10001176/s54684191/3b8b1b7d-054490d5-385641e7-ff43d2c8-9505f058.jpg",
+    "source_name": "3b8b1b7d-054490d5-385641e7-ff43d2c8-9505f058.jpg",
+    "patient_id": "10001176",
+    "relative_path": "images/p10001176/s54684191/3b8b1b7d-054490d5-385641e7-ff43d2c8-9505f058.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1422734,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10001176/s54684191/ed9c0dfc-ea25b576-0f8cc069-df4cdf14-0cd60eb7.jpg",
+    "source_name": "ed9c0dfc-ea25b576-0f8cc069-df4cdf14-0cd60eb7.jpg",
+    "patient_id": "10001176",
+    "relative_path": "images/p10001176/s54684191/ed9c0dfc-ea25b576-0f8cc069-df4cdf14-0cd60eb7.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1360298,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10001217/s52067803/a917c883-720a5bbf-02c84fc6-98ad00ac-c562ff80.jpg",
+    "source_name": "a917c883-720a5bbf-02c84fc6-98ad00ac-c562ff80.jpg",
+    "patient_id": "10001217",
+    "relative_path": "images/p10001217/s52067803/a917c883-720a5bbf-02c84fc6-98ad00ac-c562ff80.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1688566,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10001217/s58913004/5e54fc9c-37c49834-9ac3b915-55811712-9d959d26.jpg",
+    "source_name": "5e54fc9c-37c49834-9ac3b915-55811712-9d959d26.jpg",
+    "patient_id": "10001217",
+    "relative_path": "images/p10001217/s58913004/5e54fc9c-37c49834-9ac3b915-55811712-9d959d26.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 2008619,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10001401/s50225296/0009a9fb-eb905e90-824cad7c-16d40468-007f0038.jpg",
+    "source_name": "0009a9fb-eb905e90-824cad7c-16d40468-007f0038.jpg",
+    "patient_id": "10001401",
+    "relative_path": "images/p10001401/s50225296/0009a9fb-eb905e90-824cad7c-16d40468-007f0038.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1811602,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10001401/s55350604/d9db838d-4612fd1e-e45b40a9-3ea30033-26efd8e4.jpg",
+    "source_name": "d9db838d-4612fd1e-e45b40a9-3ea30033-26efd8e4.jpg",
+    "patient_id": "10001401",
+    "relative_path": "images/p10001401/s55350604/d9db838d-4612fd1e-e45b40a9-3ea30033-26efd8e4.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1342911,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/images/p10001401/s57492692/a83c7ff9-2d42639c-6ddebd0e-6b67809b-38210026.jpg",
+    "source_name": "a83c7ff9-2d42639c-6ddebd0e-6b67809b-38210026.jpg",
+    "patient_id": "10001401",
+    "relative_path": "images/p10001401/s57492692/a83c7ff9-2d42639c-6ddebd0e-6b67809b-38210026.jpg",
+    "file_info": {
+      "suffix": ".jpg",
+      "size_bytes": 1736881,
+      "processable": true
+    },
+    "observations": {
+      "modality": "figure",
+      "should_split": false,
+      "id_column": null,
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "doclayout exception: No module named 'PyQt5.QtWidgets': path contains images"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/notes/discharge_notes.csv",
+    "source_name": "discharge_notes.csv",
+    "patient_id": null,
+    "relative_path": "notes/discharge_notes.csv",
+    "file_info": {
+      "suffix": ".csv",
+      "size_bytes": 279110,
+      "processable": true
+    },
+    "observations": {
+      "modality": "table",
+      "should_split": true,
+      "id_column": "subject_id",
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "tabular suffix",
+      "table_split": "detected id column"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/notes/radiology_notes.csv",
+    "source_name": "radiology_notes.csv",
+    "patient_id": null,
+    "relative_path": "notes/radiology_notes.csv",
+    "file_info": {
+      "suffix": ".csv",
+      "size_bytes": 207903,
+      "processable": true
+    },
+    "observations": {
+      "modality": "table",
+      "should_split": true,
+      "id_column": "subject_id",
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "tabular suffix",
+      "table_split": "detected id column"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/structured/admissions.csv",
+    "source_name": "admissions.csv",
+    "patient_id": null,
+    "relative_path": "structured/admissions.csv",
+    "file_info": {
+      "suffix": ".csv",
+      "size_bytes": 5590,
+      "processable": true
+    },
+    "observations": {
+      "modality": "table",
+      "should_split": true,
+      "id_column": "subject_id",
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "tabular suffix",
+      "table_split": "detected id column"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/structured/diagnoses_icd.csv",
+    "source_name": "diagnoses_icd.csv",
+    "patient_id": null,
+    "relative_path": "structured/diagnoses_icd.csv",
+    "file_info": {
+      "suffix": ".csv",
+      "size_bytes": 13695,
+      "processable": true
+    },
+    "observations": {
+      "modality": "table",
+      "should_split": true,
+      "id_column": "subject_id",
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "tabular suffix",
+      "table_split": "detected id column"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/structured/icustays.csv",
+    "source_name": "icustays.csv",
+    "patient_id": null,
+    "relative_path": "structured/icustays.csv",
+    "file_info": {
+      "suffix": ".csv",
+      "size_bytes": 707,
+      "processable": true
+    },
+    "observations": {
+      "modality": "table",
+      "should_split": true,
+      "id_column": "subject_id",
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "tabular suffix",
+      "table_split": "detected id column"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/structured/labevents.csv",
+    "source_name": "labevents.csv",
+    "patient_id": null,
+    "relative_path": "structured/labevents.csv",
+    "file_info": {
+      "suffix": ".csv",
+      "size_bytes": 944555,
+      "processable": true
+    },
+    "observations": {
+      "modality": "table",
+      "should_split": true,
+      "id_column": "subject_id",
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "tabular suffix",
+      "table_split": "detected id column"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/structured/patients.csv",
+    "source_name": "patients.csv",
+    "patient_id": null,
+    "relative_path": "structured/patients.csv",
+    "file_info": {
+      "suffix": ".csv",
+      "size_bytes": 424,
+      "processable": true
+    },
+    "observations": {
+      "modality": "table",
+      "should_split": true,
+      "id_column": "subject_id",
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "tabular suffix",
+      "table_split": "detected id column"
+    }
+  },
+  {
+    "source_path": "/Users/mkbk/PycharmProjects/new/mimic-10/structured/prescriptions.csv",
+    "source_name": "prescriptions.csv",
+    "patient_id": null,
+    "relative_path": "structured/prescriptions.csv",
+    "file_info": {
+      "suffix": ".csv",
+      "size_bytes": 184921,
+      "processable": true
+    },
+    "observations": {
+      "modality": "table",
+      "should_split": true,
+      "id_column": "subject_id",
+      "status": "ready"
+    },
+    "worker_evidence": {
+      "modality": "tabular suffix",
+      "table_split": "detected id column"
+    }
+  }
+]

@@ -3,6 +3,28 @@ import yaml
 from pathlib import Path
 from copy import deepcopy
 
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    merged = deepcopy(base)
+    for key, value in (override or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _load_yaml_file(config_path: Path) -> dict:
+    if not config_path.exists():
+        return {}
+    with open(config_path, 'r', encoding='utf-8') as f:
+        try:
+            return yaml.safe_load(f) or {}
+        except yaml.YAMLError as e:
+            print(f"错误: 解析配置文件失败: {e}")
+            return {}
+
+
 def get_project_root() -> Path:
     """获取项目根目录"""
     return Path(__file__).parent.parent
@@ -10,26 +32,20 @@ def get_project_root() -> Path:
 def load_model_config():
     """读取并解析模型配置文件"""
     config_path = get_project_root() / "configs" / "model_config.yaml"
+    local_config_path = get_project_root() / "configs" / "model_config.local.yaml"
     
     if not config_path.exists():
         # 如果配置文件不存在，返回一个空的结构或者报错
         print(f"警告: 配置文件 {config_path} 不存在，将使用代码中的默认值。")
-        return {}
+        return _load_yaml_file(local_config_path)
 
-    with open(config_path, 'r', encoding='utf-8') as f:
-        try:
-            return yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            print(f"错误: 解析配置文件失败: {e}")
-            return {}
+    return _deep_merge(_load_yaml_file(config_path), _load_yaml_file(local_config_path))
 
 # 导出配置
 model_config = load_model_config()
 
 
 AGENT_KEY_ALIASES = {
-    "dataset_codegen_agent": "agent_1",
-    "agent_1": "dataset_codegen_agent",
     "agent_2-3": "agent_2_3",
     "agent2_3": "agent_2_3",
     "step2_3_medical_data_cleaner": "agent_2_3",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from contracts import TaskSpec, TaskType
@@ -19,6 +20,59 @@ def _has_adjacent_selection_report(path: Path) -> bool:
 def _path_contains(path: Path, *parts: str) -> bool:
     normalized = [item.lower() for item in path.parts]
     return all(part.lower() in normalized for part in parts)
+
+
+def _trim_to_existing_path(token: str, project_root: Path) -> str | None:
+    candidate_text = token.strip().strip("\"'“”‘’")
+    if not candidate_text:
+        return None
+
+    if "/" in candidate_text:
+        slash_index = candidate_text.find("/")
+        if slash_index > 0:
+            candidate_text = candidate_text[slash_index:]
+
+    path = _resolve_path(candidate_text, project_root)
+    if path.exists():
+        return candidate_text
+
+    for end in range(len(candidate_text) - 1, 0, -1):
+        probe = candidate_text[:end].rstrip("/\\")
+        if not probe:
+            continue
+        if _resolve_path(probe, project_root).exists():
+            return probe
+    return None
+
+
+def _extract_path_like_text(raw: str, project_root: Path) -> str:
+    cleaned = raw.strip().strip("\"'")
+    if not cleaned:
+        return cleaned
+
+    direct = _resolve_path(cleaned, project_root)
+    if direct.exists() or cleaned.endswith(".json") or cleaned.endswith(".csv"):
+        return cleaned
+
+    absolute_candidates = re.findall(r"(/[^\s，。；;：:]+)", cleaned)
+    for token in absolute_candidates:
+        existing = _trim_to_existing_path(token, project_root)
+        if existing:
+            return existing
+
+    tokens = [token.strip().strip("\"'") for token in re.split(r"[\s，。；;：:]+", cleaned) if token.strip()]
+    for token in reversed(tokens):
+        if not token:
+            continue
+        existing = _trim_to_existing_path(token, project_root)
+        if existing:
+            return existing
+        if "/" in token or "\\" in token or token.endswith((".json", ".csv", ".xlsx", ".xls", ".tsv")):
+            return token
+        candidate = _resolve_path(token, project_root)
+        if candidate.exists():
+            return token
+    return cleaned
 
 
 def route_task(user_input: str, project_root: str | Path | None = None) -> TaskSpec:
@@ -41,7 +95,7 @@ def route_task(user_input: str, project_root: str | Path | None = None) -> TaskS
         )
 
     if any(token in lower for token in ("修复", "repair", "失败", "报错")):
-        path = _resolve_path(raw.split()[-1], root)
+        path = _resolve_path(_extract_path_like_text(raw, root), root)
         return TaskSpec(
             task_type=TaskType.REPAIR_TASK,
             entry_artifacts={"target": str(path)},
@@ -49,7 +103,8 @@ def route_task(user_input: str, project_root: str | Path | None = None) -> TaskS
             intent_summary="用户显式请求修复已有产物。",
         )
 
-    path = _resolve_path(raw, root)
+    path_text = _extract_path_like_text(raw, root)
+    path = _resolve_path(path_text, root)
 
     if path.name == "records.json" or _path_contains(path, "reorganized_output", "_meta"):
         return TaskSpec(
@@ -105,7 +160,7 @@ def route_task(user_input: str, project_root: str | Path | None = None) -> TaskS
             confidence=0.8,
         )
 
-    if "step1" in lower or "只跑step1" in lower:
+    if "step1" in lower or "只跑step1" in lower or ("只跑" in lower and "1" in lower):
         return TaskSpec(
             task_type=TaskType.STEP1_ONLY,
             entry_artifacts={"input_path": str(path)},

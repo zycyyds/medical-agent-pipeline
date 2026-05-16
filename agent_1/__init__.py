@@ -1,5 +1,3 @@
-"""Agent-1: 版面分析执行器"""
+"""Agent-1 standalone entry and DocLayout compatibility package."""
 
-from .agentscope_tool_loader import load_toolkit_from_config
-
-__all__ = ["load_toolkit_from_config"]
+__all__: list[str] = []

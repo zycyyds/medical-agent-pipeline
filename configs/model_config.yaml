@@ -9,7 +9,7 @@ global:
   default_seed: 666
 
 agents:
-  agent_1:  # 数据集生成与代码生成智能体
+  agent_1:  # Step1 独立入口与 DocLayout 配置占位
     api_key: ""
     base_url: "https://api.minimaxi.com/v1"
     model: "MiniMax-M2.7"
@@ -69,3 +69,4 @@ agents:
     model: "gpt-4.1-mini"
     temperature: 0.0
     seed: 666
+    enable_thinking: true

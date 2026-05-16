@@ -42,7 +42,29 @@ def test_build_orchestrator_falls_back_to_agent_config_when_env_missing(monkeypa
     assert orchestrator_module.resolve_model_name("main_orchestrator", "gpt-4.1-mini") == orchestrator_module.AGENT_CFG["model_name"]
 
 
-def test_create_memory_agent_uses_configured_ollama_model(monkeypatch):
+def test_create_memory_agent_uses_configured_openai_compatible_model(monkeypatch):
+    captured = {}
+
+    class FakeOpenAIChatModel:
+        def __init__(self, **kwargs):
+            captured["model_kwargs"] = kwargs
+
+    class FakeFormatter:
+        pass
+
+    monkeypatch.setattr(memory_supervisor_module, "OpenAIChatModel", FakeOpenAIChatModel, raising=False)
+    monkeypatch.setattr(memory_supervisor_module, "OpenAIChatFormatter", FakeFormatter, raising=False)
+
+    agent = memory_supervisor_module._create_memory_agent()
+
+    assert captured["model_kwargs"]["model_name"] == memory_supervisor_module.config.LLM_MODEL
+    assert captured["model_kwargs"]["api_key"] == memory_supervisor_module.config.LLM_API_KEY
+    assert captured["model_kwargs"]["client_kwargs"]["base_url"] == memory_supervisor_module.config.LLM_BASE_URL
+    assert captured["model_kwargs"]["generate_kwargs"]["enable_thinking"] is False
+    assert isinstance(agent.formatter, FakeFormatter)
+
+
+def test_create_memory_agent_can_fallback_to_ollama_model(monkeypatch):
     captured = {}
 
     class FakeOllamaChatModel:
@@ -52,14 +74,20 @@ def test_create_memory_agent_uses_configured_ollama_model(monkeypatch):
     class FakeFormatter:
         pass
 
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(memory_supervisor_module.config, "LLM_API_KEY", "")
+    monkeypatch.setattr(memory_supervisor_module.config, "LLM_BASE_URL", "")
     monkeypatch.setattr(memory_supervisor_module, "OllamaChatModel", FakeOllamaChatModel, raising=False)
     monkeypatch.setattr(memory_supervisor_module, "OllamaChatFormatter", FakeFormatter, raising=False)
 
     agent = memory_supervisor_module._create_memory_agent()
 
     assert captured["model_kwargs"]["model_name"] == memory_supervisor_module.config.LLM_MODEL
+    assert captured["model_kwargs"]["enable_thinking"] == memory_supervisor_module.config.LLM_ENABLE_THINKING
     assert isinstance(agent.formatter, FakeFormatter)
 
 
 def test_memory_agent_model_config_is_available():
     assert memory_supervisor_module.config.LLM_MODEL
+    assert memory_supervisor_module.config.LLM_BASE_URL
