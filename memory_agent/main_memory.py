@@ -1,15 +1,20 @@
 """
-Memory Agent 独立交互入口
+Memory Agent 独立交互入口。
 
 用法：
-    cd <项目根目录>
     python memory_agent/main_memory.py
+    python memory_agent/main_memory.py --status
 """
 
+from __future__ import annotations
+
+import argparse
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -20,25 +25,31 @@ from agentscope.agent import ReActAgent, UserAgent
 from agentscope.formatter import OllamaChatFormatter, OpenAIChatFormatter
 from agentscope.message import Msg
 from agentscope.model import OllamaChatModel, OpenAIChatModel
-from agentscope.tool import Toolkit
+from agentscope.tool import Toolkit, ToolResponse
 
 from memory_agent.config import config
-from memory_agent.memory_tool import (
-    MEMORY_BANK_PATH,
-    curator_apply_reflection,
-    curator_grow_and_refine,
-    playbook_add_bullet,
-    playbook_get_context,
-    playbook_get_statistics,
-    playbook_list_bullets,
-    reflector_analyze,
-    update_strategy_count,
-)
+from memory_agent.services.memory_service import get_default_memory_service
 
 
-async def main():
-    agentscope.init(project="MemoryAgent", name="MemoryAgentStandalone")
+def _json_response(payload: dict[str, Any]) -> ToolResponse:
+    return ToolResponse(content=json.dumps(payload, ensure_ascii=False, indent=2, default=str))
 
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="MemoryAgent ReMe service entrypoint.")
+    parser.add_argument("--status", action="store_true", help="Print MemoryAgent/ReMe backend status and exit.")
+    parser.add_argument("--json", action="store_true", help="Print command output as JSON.")
+    return parser.parse_args(argv)
+
+
+def _memory_generate_kwargs() -> dict[str, Any]:
+    return {
+        "temperature": config.LLM_TEMPERATURE,
+        "seed": config.LLM_SEED,
+    }
+
+
+def _create_memory_model_and_formatter():
     api_key = os.environ.get("OPENAI_API_KEY") or config.LLM_API_KEY or None
     base_url = os.environ.get("OPENAI_API_BASE") or config.LLM_BASE_URL
     if api_key or base_url:
@@ -47,58 +58,83 @@ async def main():
             api_key=api_key,
             stream=False,
             client_kwargs={"base_url": base_url or "https://api.openai.com/v1"},
-            generate_kwargs={
-                "temperature": config.LLM_TEMPERATURE,
-                "seed": config.LLM_SEED,
-            },
+            generate_kwargs=_memory_generate_kwargs(),
         )
-        formatter = OpenAIChatFormatter()
-    else:
-        model = OllamaChatModel(
-            model_name=config.get_llm_model(),
-            options={
-                "temperature": config.LLM_TEMPERATURE,
-                "seed": config.LLM_SEED,
-            },
-        )
-        formatter = OllamaChatFormatter()
+        return model, OpenAIChatFormatter()
+
+    model = OllamaChatModel(
+        model_name=config.get_llm_model(),
+        options={
+            "temperature": config.LLM_TEMPERATURE,
+            "seed": config.LLM_SEED,
+        },
+    )
+    return model, OllamaChatFormatter()
+
+
+async def memory_status_tool() -> ToolResponse:
+    """查看当前 MemoryAgent / ReMe 后端状态。"""
+
+    return _json_response(get_default_memory_service().status())
+
+
+async def memory_search_tool(query_text: str) -> ToolResponse:
+    """按任务 query 检索 ReMeLight 规则记忆和 ReMe Step/Tool 经验记忆。"""
+
+    context, used_ids = await get_default_memory_service().get_context(query_text=query_text)
+    return _json_response({"context": context, "used_memory_ids": used_ids})
+
+
+async def memory_report_tool(trace_json: str) -> ToolResponse:
+    """把结构化 trace 写入 ReMeLight 规则记忆和 ReMe Step/Tool 经验记忆。"""
+
+    try:
+        payload = json.loads(trace_json)
+    except json.JSONDecodeError:
+        payload = {"raw_trace_text": trace_json, "success": False}
+    summary = await get_default_memory_service().report_result(payload)
+    return _json_response({"summary": summary})
+
+
+def _print_payload(payload: dict[str, Any], as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+        return
+    print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
+
+
+async def main(argv: list[str] | None = None):
+    args = parse_args(argv or [])
+    service = get_default_memory_service()
+
+    if args.status:
+        _print_payload(service.status(), args.json)
+        return
+
+    agentscope.init(project="MemoryAgent", name="MemoryAgentStandalone")
+    model, formatter = _create_memory_model_and_formatter()
 
     toolkit = Toolkit()
-    toolkit.register_tool_function(playbook_get_context)
-    toolkit.register_tool_function(playbook_list_bullets)
-    toolkit.register_tool_function(playbook_get_statistics)
-    toolkit.register_tool_function(update_strategy_count)
-    toolkit.register_tool_function(playbook_add_bullet)
-    toolkit.register_tool_function(reflector_analyze)
-    toolkit.register_tool_function(curator_apply_reflection)
-    toolkit.register_tool_function(curator_grow_and_refine)
+    toolkit.register_tool_function(memory_status_tool)
+    toolkit.register_tool_function(memory_search_tool)
+    toolkit.register_tool_function(memory_report_tool)
 
-    sys_prompt = f"""你是一个记忆反思智能体 (Memory Agent)，负责管理 ACE 架构中的策略本 (Playbook)。
-并且全程用中文回复用户。
+    sys_prompt = f"""你是 MemoryAgent，负责受控管理多智能体流水线的 ReMe 记忆。
+你全程用中文回复用户。
 
-你的职责：
-1. 维护一个 ACE 风格的 Playbook，而不是单段总结
-2. 分析其他 Agent 的执行轨迹，判断哪些 bullet 有帮助、哪些有害
-3. 把 reflection 交给 curator 生成增量 delta，再由系统做确定性合并
-4. 通过 grow-and-refine 去重、归并、清理低效策略
+你的权限边界：
+- 你只能检索、总结、写入记忆。
+- 你不能决定主 pipeline 下一步执行哪个 Step。
+- 你不能修改 records.json、生成脚本或业务输出。
+- 你不能保存完整医疗数据、完整 CSV、完整图片或完整脚本正文。
 
-你可以使用的工具分为三类：
+工具：
+- memory_status_tool：查看 ReMeLight 和 ReMe Task/Tool 后端状态。
+- memory_search_tool(query_text)：检索规则记忆和相似经验。
+- memory_report_tool(trace_json)：把结构化执行 trace 写入记忆。
 
-【Playbook 工具 - 策略本管理】
-- playbook_get_context: 获取当前 ACE Playbook 上下文，支持按 query 检索 bullet
-- playbook_list_bullets: 查看当前有效 bullets
-- playbook_get_statistics: 查看当前统计
-- update_strategy_count(bullet_ids, is_helpful): 批量更新策略的有帮助/有害计数
-- playbook_add_bullet(content, bullet_type): 仅在明确需要手工补规则时使用
-
-【Reflector 工具 - 反思分析】
-- reflector_analyze(trace_json, max_refinement_rounds=3): 基于预结构化 trace 分析执行轨迹
-
-【Curator 工具 - 整理优化】
-- curator_apply_reflection(reflection_json, trace_json): 基于 reflection 和结构化 trace 生成 delta 并合并进 playbook
-- curator_grow_and_refine(): 清理无效策略，优化策略本
-
-当前记忆库路径：{MEMORY_BANK_PATH}
+当前 ReMeLight 目录：{config.resolve_project_path(config.REME_LIGHT_ROOT)}
+当前 ReMe Vector 目录：{config.resolve_project_path(config.REME_VECTOR_ROOT)}
 """
 
     agent = ReActAgent(
@@ -111,8 +147,7 @@ async def main():
     )
 
     user = UserAgent(name="User")
-
-    msg = Msg(name="system", content="请输入指令。", role="system")
+    msg = Msg(name="system", content="请输入 MemoryAgent 指令。输入 exit 退出。", role="system")
     print(f"\n{agent.name}: {msg.content}")
 
     while True:
@@ -134,4 +169,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main(sys.argv[1:]))

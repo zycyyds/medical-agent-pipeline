@@ -9,12 +9,14 @@ ORCHESTRATOR_DIR = PROJECT_ROOT / "main_orchestrator"
 CORE_DIR = ORCHESTRATOR_DIR / "core"
 EXECUTION_DIR = ORCHESTRATOR_DIR / "execution"
 STEP1_DIR = PROJECT_ROOT / "step-1"
-for path in (PROJECT_ROOT, ORCHESTRATOR_DIR, CORE_DIR, EXECUTION_DIR, STEP1_DIR):
+STEP4_DIR = PROJECT_ROOT / "step-4"
+for path in (PROJECT_ROOT, ORCHESTRATOR_DIR, CORE_DIR, EXECUTION_DIR, STEP1_DIR, STEP4_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
 from contracts import WorkerResult, WorkerStatus  # noqa: E402
-from handoffs import run_step1_handoff  # noqa: E402
+from handoffs import run_step1_handoff, run_step4_handoff  # noqa: E402
+from step4_runtime import get_default_output_root, validate_step4_output as runtime_validate_step4_output  # noqa: E402
 from validators import validate_records, validate_required_files, validate_step1_output  # noqa: E402
 
 
@@ -116,6 +118,87 @@ class Step1Supervisor:
             "records_path": str(self.records_path),
             "generated_script_path": str(self.generated_script_path),
             "step1_output_root": str(self.output_root),
+        }
+        artifacts.update(extra or {})
+        return artifacts
+
+
+class Step4Supervisor:
+    def __init__(self, output_root: str | Path | None = None, memory_context: str = "") -> None:
+        self.output_root = Path(output_root) if output_root else Path(get_default_output_root())
+        self.memory_context = memory_context
+
+    async def run_from_input(
+        self,
+        input_path: str | Path,
+        task_text: str | None = None,
+        memory_context: str | None = None,
+    ) -> WorkerResult:
+        try:
+            result = await run_step4_handoff(
+                task_type="resume_from_step2_3",
+                input_path=str(input_path),
+                output_root=str(self.output_root),
+                task_text=task_text,
+                memory_context=memory_context if memory_context is not None else self.memory_context,
+            )
+            return self._post_handoff_validate(result, input_path=input_path, task_text=task_text)
+        except Exception as exc:
+            return WorkerResult.failure(
+                summary="Step4 列筛选失败。",
+                issues=[str(exc)],
+                status=WorkerStatus.NEEDS_REPAIR,
+                artifacts=self._artifact_dict(input_path=input_path, task_text=task_text),
+            )
+
+    def _post_handoff_validate(
+        self,
+        result: WorkerResult,
+        input_path: str | Path | None = None,
+        task_text: str | None = None,
+    ) -> WorkerResult:
+        if result.status != WorkerStatus.SUCCESS:
+            return result
+
+        filtered_csv = result.artifacts.get("filtered_csv_path") or result.artifacts.get("next_input_csv")
+        selection_report = result.artifacts.get("selection_report_path") or result.artifacts.get("next_selection_report")
+        if not filtered_csv or not selection_report:
+            return WorkerResult.failure(
+                summary="Step4 handoff 后缺少关键产物。",
+                issues=["缺少 filtered_csv_path 或 selection_report_path。"],
+                status=WorkerStatus.NEEDS_REPAIR,
+                artifacts=self._artifact_dict(input_path=input_path, task_text=task_text, extra=result.artifacts),
+            )
+
+        validation = runtime_validate_step4_output(
+            filtered_csv_path=filtered_csv,
+            selection_report_path=selection_report,
+            next_input_csv=result.artifacts.get("next_input_csv"),
+            next_selection_report=result.artifacts.get("next_selection_report"),
+        )
+        if not validation.passed:
+            return WorkerResult.failure(
+                summary="Step4 handoff 后输出验收失败。",
+                issues=validation.issues,
+                status=WorkerStatus.NEEDS_REPAIR,
+                artifacts=self._artifact_dict(
+                    input_path=input_path,
+                    task_text=task_text,
+                    extra={**result.artifacts, **validation.details},
+                ),
+            )
+        return result
+
+    def _artifact_dict(
+        self,
+        input_path: str | Path | None = None,
+        task_text: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        artifacts = {
+            "input_path": str(input_path or ""),
+            "output_root": str(self.output_root),
+            "task_text": task_text or "",
         }
         artifacts.update(extra or {})
         return artifacts

@@ -1,5 +1,4 @@
 import sys
-import inspect
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -7,12 +6,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import memory_agent.main_memory as main_memory_module
-import memory_agent.memory_tool as memory_tool_module
-from memory_agent.core.curator import ACECurator
-from memory_agent.core.reflector import ACEReflector
 
 
-def test_make_chat_model_factory_builds_openai_model_from_env(monkeypatch):
+def test_memory_model_factory_builds_openai_model_from_env(monkeypatch):
     captured = {}
 
     class FakeOpenAIChatModel:
@@ -22,9 +18,9 @@ def test_make_chat_model_factory_builds_openai_model_from_env(monkeypatch):
     monkeypatch.setenv("MODEL_NAME", "gpt-5.4")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_API_BASE", "http://127.0.0.1:8317/v1")
-    monkeypatch.setattr(memory_tool_module, "OpenAIChatModel", FakeOpenAIChatModel, raising=False)
+    monkeypatch.setattr(main_memory_module, "OpenAIChatModel", FakeOpenAIChatModel, raising=False)
 
-    memory_tool_module.make_chat_model_factory("memory_agent")()
+    main_memory_module._create_memory_model_and_formatter()
 
     assert captured["kwargs"]["model_name"] == "gpt-5.4"
     assert captured["kwargs"]["api_key"] == "test-key"
@@ -34,17 +30,7 @@ def test_make_chat_model_factory_builds_openai_model_from_env(monkeypatch):
 def test_memory_agent_model_falls_back_to_config_when_env_missing(monkeypatch):
     monkeypatch.delenv("MODEL_NAME", raising=False)
 
-    assert memory_tool_module.config.get_llm_model() == memory_tool_module.config.LLM_MODEL
-
-
-def test_reflector_defaults_to_openai_model_class():
-    assert inspect.signature(ACEReflector.__init__).parameters["model_cls"].default.__name__ == "OpenAIChatModel"
-
-
-
-def test_curator_defaults_to_openai_model_class():
-    assert inspect.signature(ACECurator.__init__).parameters["model_cls"].default.__name__ == "OpenAIChatModel"
-
+    assert main_memory_module.config.get_llm_model() == main_memory_module.config.LLM_MODEL
 
 
 def test_main_memory_uses_openai_model(monkeypatch):

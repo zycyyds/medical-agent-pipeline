@@ -82,7 +82,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--disable-memory-agent",
         action="store_true",
-        help="Disable Playbook context injection and post-run reflection.",
+        help="Disable ReMe memory context injection and post-run memory recording.",
     )
     parser.add_argument(
         "--json",
@@ -106,12 +106,15 @@ async def run_pipeline(
         task_spec.intent_summary = f"用户显式指定 task_type={task_type}"
 
     context_str = ""
-    used_bullet_ids: list[str] = []
+    used_memory_ids: list[str] = []
     if enable_memory_agent and get_pipeline_context is not None:
         try:
-            context_str, used_bullet_ids = await get_pipeline_context(query_text=task_spec.intent_summary or user_input)
+            context_str, used_memory_ids = await get_pipeline_context(
+                query_text=task_spec.intent_summary or user_input,
+                task_spec=task_spec,
+            )
         except Exception as exc:
-            context_str = f"ACE Playbook 读取失败，主流程继续执行: {exc}"
+            context_str = f"MemoryAgent 读取失败，主流程继续执行: {exc}"
 
     result = await run_with_orchestrator_agent(
         task_spec=task_spec,
@@ -126,13 +129,13 @@ async def run_pipeline(
                     "input_text": user_input,
                     "duration_seconds": 0.0,
                     "orchestrator_summary": result.summary,
-                    "retrieved_bullet_ids": used_bullet_ids,
+                    "retrieved_memory_ids": used_memory_ids,
                     "steps": result.worker_results,
                     "raw_trace_text": json.dumps(result.to_dict(), ensure_ascii=False),
                     "success": result.status.value == "SUCCESS",
                     "failure_signals": result.repair_ticket.validator_errors if result.repair_ticket else [],
                 },
-                used_bullet_ids=used_bullet_ids,
+                used_memory_ids=used_memory_ids,
             )
         except Exception as exc:
             result.worker_results.append(
@@ -153,6 +156,7 @@ async def run_pipeline(
 async def main_async(args: argparse.Namespace) -> PipelineRunResult:
     if args.json:
         os.environ["STEP1_PROGRESS_ENABLED"] = "false"
+        os.environ["MEMORY_PROGRESS_ENABLED"] = "false"
     user_input = args.input or str(PROJECT_ROOT / "mimic-10")
     return await run_pipeline(
         user_input=user_input,
@@ -209,6 +213,7 @@ def _resolve_interactive_input(user_input: str, last_result: PipelineRunResult |
 async def interactive_loop(args: argparse.Namespace) -> None:
     if args.json:
         os.environ["STEP1_PROGRESS_ENABLED"] = "false"
+        os.environ["MEMORY_PROGRESS_ENABLED"] = "false"
 
     print("[MultiAgent] 交互模式已启动。直接输入任务，输入 help 查看示例，输入 exit 退出。")
     if args.task_type:

@@ -16,7 +16,7 @@ if __name__ == "__main__":
     result = run_reorganize_from_records(
         records_path=Path(r"/Users/mkbk/PycharmProjects/new/reorganized_output/_meta/records.json"),
         output_root=Path(r"/Users/mkbk/PycharmProjects/new/program/output/step1_results"),
-        input_root=Path(r"/Users/mkbk/PycharmProjects/new/mimic-mini") if r"/Users/mkbk/PycharmProjects/new/mimic-mini" else None,
+        input_root=Path(r"/Users/mkbk/PycharmProjects/new/1") if r"/Users/mkbk/PycharmProjects/new/1" else None,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     raise SystemExit(0 if result.get("status") == "SUCCESS" else 1)

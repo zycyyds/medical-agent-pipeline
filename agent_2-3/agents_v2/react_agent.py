@@ -51,12 +51,18 @@ ReactMedicalAgent —— 基于 ReAct 框架的统一医学数据处理 Agent
   - build_output_dir      创建带时间戳输出目录
 """
 import asyncio
+import concurrent.futures
+import csv
 import inspect
 import json
 import os
+import re
 import sys
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
+
+import tqdm as _tqdm_module
+from tqdm.asyncio import tqdm as atqdm
 
 _HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _HERE not in sys.path:
@@ -195,38 +201,6 @@ class ProcessingPlan:
 # 工具包装辅助：把返回 dict/str 的函数包装成返回 ToolResponse
 # ---------------------------------------------------------------------------
 
-def _compact_tool_result_for_display(result: Any) -> Any:
-    """Keep large directory scans out of the ReAct transcript/tool display."""
-    if not isinstance(result, dict):
-        return result
-    if "patients" not in result or "statistics" not in result:
-        return result
-
-    patients = result.get("patients")
-    if not isinstance(patients, dict):
-        return result
-
-    patient_preview: Dict[str, Any] = {}
-    for pid, pdata in list(patients.items())[:5]:
-        if not isinstance(pdata, dict):
-            continue
-        files = pdata.get("files", [])
-        table_sub_files = pdata.get("table_sub_files", [])
-        patient_preview[pid] = {
-            "file_count": pdata.get("file_count", 0),
-            "categories": pdata.get("categories", []),
-            "sample_files": files[:2] if isinstance(files, list) else [],
-            "table_path": pdata.get("table_path"),
-            "table_sub_files": table_sub_files[:2] if isinstance(table_sub_files, list) else [],
-        }
-
-    compact = dict(result)
-    compact["patients"] = patient_preview
-    compact["patients_truncated"] = len(patients) > len(patient_preview)
-    compact["total_patient_entries"] = len(patients)
-    return compact
-
-
 def _wrap_tool(fn: Callable) -> Callable:
     """将返回 dict 或 str 的工具函数包装为返回 ToolResponse。"""
     import functools
@@ -235,7 +209,6 @@ def _wrap_tool(fn: Callable) -> Callable:
         @functools.wraps(fn)
         async def async_wrapper(*args, **kwargs):
             result = await fn(*args, **kwargs)
-            result = _compact_tool_result_for_display(result)
             text = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
             return ToolResponse(content=[TextBlock(type="text", text=text)])
         return async_wrapper
@@ -243,7 +216,6 @@ def _wrap_tool(fn: Callable) -> Callable:
         @functools.wraps(fn)
         def sync_wrapper(*args, **kwargs):
             result = fn(*args, **kwargs)
-            result = _compact_tool_result_for_display(result)
             text = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else str(result)
             return ToolResponse(content=[TextBlock(type="text", text=text)])
         return sync_wrapper
@@ -329,7 +301,12 @@ class ReactMedicalAgent(AgentBase):
         use_llm: bool = True,
         verbose: bool = False,
         output_dir: Optional[str] = None,
-        concurrency: int = 60,
+        concurrency: int = 8,
+        ocr_concurrency: int = 0,
+        pipeline_mode: bool = False,
+        ocr_workers: int = 64,
+        ocr_cache: Optional[str] = None,
+        no_fill: bool = False,
     ):
         """
         Args:
@@ -339,6 +316,11 @@ class ReactMedicalAgent(AgentBase):
             verbose: 是否打印详细日志
             output_dir: 输出根目录（None 则在输入文件同目录下创建 results_v2）
             concurrency: 最大并发 LLM 调用数（默认 8）
+            ocr_concurrency: 本地 OCR 推理并发数（0 = 自动，取 cpu_count）
+            pipeline_mode: 启用流水线模式（多线程批量 OCR → 并发 LLM 抽取 → 回填）
+            ocr_workers: 流水线模式下 OCR 线程数（默认 64）
+            ocr_cache: 流水线模式下已有 OCR 缓存 JSON 路径（指定后跳过 OCR 步骤）
+            no_fill: 流水线模式下跳过回填步骤
         """
         super().__init__()
         self.name = name
@@ -347,6 +329,17 @@ class ReactMedicalAgent(AgentBase):
         self.output_dir = output_dir
         self._concurrency = concurrency
         self._sem: Optional[asyncio.Semaphore] = None
+        self._pipeline_mode = pipeline_mode
+        self._ocr_workers = ocr_workers
+        self._ocr_cache = ocr_cache
+        self._no_fill = no_fill
+        # OCR 并发：GPU 场景下不宜太多进程同时占显存，默认限制为 GPU 数 * 4
+        import os as _os
+        cpu = _os.cpu_count() or 4
+        self._ocr_concurrency = ocr_concurrency if ocr_concurrency > 0 else min(cpu, 8)
+        self._ocr_sem: Optional[asyncio.Semaphore] = None
+        # OCR 进程池：多进程并行 OCR 绕过 GIL，大幅提升吞吐
+        self._ocr_pool: Optional[concurrent.futures.ProcessPoolExecutor] = None
         self.stats = {"total": 0, "success": 0, "failed": 0, "by_type": {}}
 
         # 初始化模型
@@ -357,7 +350,7 @@ class ReactMedicalAgent(AgentBase):
         # 构建 Toolkit（所有工具共享）
         self._toolkit = _build_toolkit()
 
-        # 构建 ReAct 探索 Agent
+        # 构建 ReAct 探索 Agent（仅用于顶层目录探索，不对每个病人调用）
         self._explorer: Optional[ReActAgent] = None
         if self.model:
             self._explorer = ReActAgent(
@@ -367,6 +360,9 @@ class ReactMedicalAgent(AgentBase):
                 formatter=OpenAIChatFormatter(),
                 toolkit=self._toolkit,
             )
+            # 非 verbose 模式下关闭 agentscope 的控制台日志，避免淹没进度条
+            if not self.verbose:
+                self._explorer.set_console_output_enabled(False)
 
     # ------------------------------------------------------------------
     # 初始化
@@ -375,6 +371,20 @@ class ReactMedicalAgent(AgentBase):
         if self._sem is None:
             self._sem = asyncio.Semaphore(self._concurrency)
         return self._sem
+
+    def _get_ocr_sem(self) -> asyncio.Semaphore:
+        """OCR 专用信号量，限制本地 CPU 推理并发数。"""
+        if self._ocr_sem is None:
+            self._ocr_sem = asyncio.Semaphore(self._ocr_concurrency)
+        return self._ocr_sem
+
+    def _get_ocr_pool(self) -> concurrent.futures.ThreadPoolExecutor:
+        """懒初始化 OCR 线程池。onnxruntime C++ 推理时释放 GIL，线程池可真并发且无进程冷启动开销。"""
+        if self._ocr_pool is None:
+            self._ocr_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=self._ocr_concurrency
+            )
+        return self._ocr_pool
     # ------------------------------------------------------------------
 
     def _init_model(self) -> Optional[OpenAIChatModel]:
@@ -461,7 +471,11 @@ class ReactMedicalAgent(AgentBase):
     # ------------------------------------------------------------------
 
     async def _explore_and_plan(self, input_path: str) -> ProcessingPlan:
-        """让 ReAct Agent 探索数据，解析其输出为 ProcessingPlan。"""
+        """生成处理计划。对目录类型直接用规则，避免浪费 LLM 调用。"""
+        # 目录类型结构固定，直接规则判断即可，无需 LLM 探索
+        if os.path.isdir(input_path):
+            return self._rule_based_plan(input_path)
+
         if not self._explorer:
             return self._rule_based_plan(input_path)
 
@@ -568,6 +582,8 @@ class ReactMedicalAgent(AgentBase):
         """根据处理计划调用对应的执行流程。"""
         # 如果实际路径是目录，无论 plan 类型如何都走目录流程
         if os.path.isdir(input_path):
+            if self._pipeline_mode:
+                return await self._run_pipeline(input_path)
             return await self._run_directory(input_path, plan)
         dt = plan.data_type
         if dt == "csv":
@@ -632,69 +648,76 @@ class ReactMedicalAgent(AgentBase):
             "extracted_entities": 0,
         }
 
-        # 对每条记录的 text_fields 做信息抽取
-        for rec in records:
-            for field in plan.text_fields:
-                # 支持点号路径（如 "就诊文本.notes"）
-                parts = field.split(".", 1)
-                if len(parts) == 2:
-                    top_val = rec.get(parts[0])
-                    field_val = top_val.get(parts[1]) if isinstance(top_val, dict) else None
-                    field_key = field.replace(".", "_")  # 用于写回 rec 的键名
-                else:
-                    field_val = rec.get(field)
-                    field_key = field
+        # 对每条记录的 text_fields 做信息抽取（并发，每个 (rec, field) 独立协程）
+        _jsonl_lock = asyncio.Lock()
 
-                if field_val is None:
-                    continue
-                # 支持字段值为 dict、list 或 str
-                if isinstance(field_val, list):
-                    texts = []
-                    for item in field_val:
-                        if isinstance(item, dict) and "text" in item:
-                            texts.append(str(item["text"]))
-                        elif isinstance(item, str) and len(item) > 50:
-                            texts.append(item)
-                    text = "\n".join(texts)
-                elif isinstance(field_val, dict):
-                    # 尝试拼接所有 notes 的 text
-                    texts = []
-                    for sub_key, sub_val in field_val.items():
-                        if isinstance(sub_val, list):
-                            for item in sub_val:
-                                if isinstance(item, dict) and "text" in item:
-                                    texts.append(str(item["text"]))
-                        elif isinstance(sub_val, str) and len(sub_val) > 50:
-                            texts.append(sub_val)
-                    text = "\n".join(texts)
-                elif isinstance(field_val, str):
-                    text = field_val
-                else:
-                    continue
+        async def _extract_jsonl_field(rec: Dict, field: str) -> None:
+            # 支持点号路径（如 "就诊文本.notes"）
+            parts = field.split(".", 1)
+            if len(parts) == 2:
+                top_val = rec.get(parts[0])
+                field_val = top_val.get(parts[1]) if isinstance(top_val, dict) else None
+                field_key = field.replace(".", "_")
+            else:
+                field_val = rec.get(field)
+                field_key = field
 
-                if len(text.strip()) < 50:
-                    continue
+            if field_val is None:
+                return
+            # 支持字段值为 dict、list 或 str
+            if isinstance(field_val, list):
+                texts = []
+                for item in field_val:
+                    if isinstance(item, dict) and "text" in item:
+                        texts.append(str(item["text"]))
+                    elif isinstance(item, str) and len(item) > 50:
+                        texts.append(item)
+                text = "\n".join(texts)
+            elif isinstance(field_val, dict):
+                texts = []
+                for sub_key, sub_val in field_val.items():
+                    if isinstance(sub_val, list):
+                        for item in sub_val:
+                            if isinstance(item, dict) and "text" in item:
+                                texts.append(str(item["text"]))
+                    elif isinstance(sub_val, str) and len(sub_val) > 50:
+                        texts.append(sub_val)
+                text = "\n".join(texts)
+            elif isinstance(field_val, str):
+                text = field_val
+            else:
+                return
 
+            if len(text.strip()) < 50:
+                return
+
+            async with self._get_sem():
                 ext_result = await extract_from_text(text)
-                if not ext_result["success"]:
-                    continue
+            if not ext_result["success"]:
+                return
 
+            entities = ext_result["entities"]
+            rec[f"{field_key}_entities_json"] = json.dumps(entities, ensure_ascii=False)
+            rec[f"{field_key}_entity_count"] = len(entities)
+            rec[f"{field_key}_impression"] = ext_result.get("impression", "")
+            by_cat: Dict[str, List[str]] = {}
+            for ent in entities:
+                cat = ent.get("category", "Other")
+                name = ent.get("name", "")
+                val = ent.get("value", "")
+                entry = f"{name}:{val}" if val else name
+                by_cat.setdefault(cat, []).append(entry)
+            for cat, items in by_cat.items():
+                rec[f"{field_key}_{cat}"] = "; ".join(items)
+            async with _jsonl_lock:
                 stats["extracted_texts"] += 1
-                entities = ext_result["entities"]
                 stats["extracted_entities"] += len(entities)
 
-                rec[f"{field_key}_entities_json"] = json.dumps(entities, ensure_ascii=False)
-                rec[f"{field_key}_entity_count"] = len(entities)
-                rec[f"{field_key}_impression"] = ext_result.get("impression", "")
-                by_cat: Dict[str, List[str]] = {}
-                for ent in entities:
-                    cat = ent.get("category", "Other")
-                    name = ent.get("name", "")
-                    val = ent.get("value", "")
-                    entry = f"{name}:{val}" if val else name
-                    by_cat.setdefault(cat, []).append(entry)
-                for cat, items in by_cat.items():
-                    rec[f"{field_key}_{cat}"] = "; ".join(items)
+        await asyncio.gather(*[
+            _extract_jsonl_field(rec, field)
+            for rec in records
+            for field in plan.text_fields
+        ])
 
         # 保存结果
         out_dir = self._resolve_output_dir(file_path)
@@ -755,35 +778,42 @@ class ReactMedicalAgent(AgentBase):
             "extracted_entities": 0,
         }
 
-        # 2. 长文本列：信息抽取
-        for col in plan.extraction_columns:
-            if self.verbose:
-                print(f"[{self.name}] [CSV] 抽取列: {col}")
-            for row in rows:
-                text = str(row.get(col, "")).strip()
-                if len(text) < 50:
-                    continue
+        # 2. 长文本列：信息抽取（并发，每个 (row, col) 独立协程）
+        _csv_lock = asyncio.Lock()
+
+        async def _extract_csv_cell(row: Dict, col: str) -> None:
+            text = str(row.get(col, "")).strip()
+            if len(text) < 50:
+                return
+            async with self._get_sem():
                 ext_result = await extract_from_text(text)
-                if not ext_result["success"]:
-                    continue
+            if not ext_result["success"]:
+                return
+            entities = ext_result["entities"]
+            row[f"{col}_entities_json"] = json.dumps(entities, ensure_ascii=False)
+            row[f"{col}_entity_count"] = len(entities)
+            row[f"{col}_impression"] = ext_result.get("impression", "")
+            by_cat: Dict[str, List[str]] = {}
+            for ent in entities:
+                cat = ent.get("category", "Other")
+                name = ent.get("name", "")
+                val = ent.get("value", "")
+                entry = f"{name}:{val}" if val else name
+                by_cat.setdefault(cat, []).append(entry)
+            for cat, items in by_cat.items():
+                row[f"{col}_{cat}"] = "; ".join(items)
+            async with _csv_lock:
                 stats["extracted_texts"] += 1
-                entities = ext_result["entities"]
                 stats["extracted_entities"] += len(entities)
 
-                # 写回行
-                row[f"{col}_entities_json"] = json.dumps(entities, ensure_ascii=False)
-                row[f"{col}_entity_count"] = len(entities)
-                row[f"{col}_impression"] = ext_result.get("impression", "")
-                # 按类别汇总
-                by_cat: Dict[str, List[str]] = {}
-                for ent in entities:
-                    cat = ent.get("category", "Other")
-                    name = ent.get("name", "")
-                    val = ent.get("value", "")
-                    entry = f"{name}:{val}" if val else name
-                    by_cat.setdefault(cat, []).append(entry)
-                for cat, items in by_cat.items():
-                    row[f"{col}_{cat}"] = "; ".join(items)
+        if self.verbose:
+            for col in plan.extraction_columns:
+                print(f"[{self.name}] [CSV] 抽取列: {col}")
+        await asyncio.gather(*[
+            _extract_csv_cell(row, col)
+            for col in plan.extraction_columns
+            for row in rows
+        ])
 
         # 3. 保存结果
         out_dir = self._resolve_output_dir(file_path)
@@ -835,32 +865,42 @@ class ReactMedicalAgent(AgentBase):
             "extracted_entities": 0,
         }
 
-        # 2. 长文本列：信息抽取
-        for col in plan.extraction_columns:
-            if self.verbose:
-                print(f"[{self.name}] [Excel] 抽取列: {col}")
-            for row in rows:
-                text = str(row.get(col, "")).strip()
-                if len(text) < 50:
-                    continue
+        # 2. 长文本列：信息抽取（并发）
+        _excel_lock = asyncio.Lock()
+
+        async def _extract_excel_cell(row: Dict, col: str) -> None:
+            text = str(row.get(col, "")).strip()
+            if len(text) < 50:
+                return
+            async with self._get_sem():
                 ext_result = await extract_from_text(text)
-                if not ext_result["success"]:
-                    continue
+            if not ext_result["success"]:
+                return
+            entities = ext_result["entities"]
+            row[f"{col}_entities_json"] = json.dumps(entities, ensure_ascii=False)
+            row[f"{col}_entity_count"] = len(entities)
+            row[f"{col}_impression"] = ext_result.get("impression", "")
+            by_cat: Dict[str, List[str]] = {}
+            for ent in entities:
+                cat = ent.get("category", "Other")
+                name = ent.get("name", "")
+                val = ent.get("value", "")
+                entry = f"{name}:{val}" if val else name
+                by_cat.setdefault(cat, []).append(entry)
+            for cat, items in by_cat.items():
+                row[f"{col}_{cat}"] = "; ".join(items)
+            async with _excel_lock:
                 stats["extracted_texts"] += 1
-                entities = ext_result["entities"]
                 stats["extracted_entities"] += len(entities)
-                row[f"{col}_entities_json"] = json.dumps(entities, ensure_ascii=False)
-                row[f"{col}_entity_count"] = len(entities)
-                row[f"{col}_impression"] = ext_result.get("impression", "")
-                by_cat: Dict[str, List[str]] = {}
-                for ent in entities:
-                    cat = ent.get("category", "Other")
-                    name = ent.get("name", "")
-                    val = ent.get("value", "")
-                    entry = f"{name}:{val}" if val else name
-                    by_cat.setdefault(cat, []).append(entry)
-                for cat, items in by_cat.items():
-                    row[f"{col}_{cat}"] = "; ".join(items)
+
+        if self.verbose:
+            for col in plan.extraction_columns:
+                print(f"[{self.name}] [Excel] 抽取列: {col}")
+        await asyncio.gather(*[
+            _extract_excel_cell(row, col)
+            for col in plan.extraction_columns
+            for row in rows
+        ])
 
         # 3. 保存结果
         out_dir = self._resolve_output_dir(file_path)
@@ -905,16 +945,22 @@ class ReactMedicalAgent(AgentBase):
             "extraction_result": {},
         }
 
-        # OCR
-        ocr = ocr_and_clean(file_path)
+        # OCR 阶段：CPU 密集操作，用进程池绕过 GIL + ocr_sem 限并发
+        loop = asyncio.get_running_loop()
+        async with self._get_ocr_sem():
+            ocr = await loop.run_in_executor(
+                self._get_ocr_pool(), ocr_and_clean, file_path
+            )
+
         result["ocr_text"] = ocr.get("ocr_text", "")
         result["cleaned_text"] = ocr.get("cleaned_text", "")
         if not ocr.get("success") or not result["cleaned_text"]:
             result["error"] = ocr.get("error", "OCR 失败")
             return result
 
-        # 信息抽取
-        ext = await extract_from_text(result["cleaned_text"])
+        # 信息抽取阶段：OCR 完成后再获取 LLM 槽，两阶段 sem 不嵌套
+        async with self._get_sem():
+            ext = await extract_from_text(result["cleaned_text"])
         result["extraction_result"] = ext
         result["success"] = ext.get("success", False)
         if not result["success"]:
@@ -949,7 +995,8 @@ class ReactMedicalAgent(AgentBase):
             result["error"] = "文本内容为空"
             return result
 
-        ext = await extract_from_text(text)
+        async with self._get_sem():
+            ext = await extract_from_text(text)
         result["extraction_result"] = ext
         result["success"] = ext.get("success", False)
         if not result["success"]:
@@ -1012,9 +1059,10 @@ class ReactMedicalAgent(AgentBase):
         # reorganized_output 格式：每个患者各有独立 table_path，分别加载
         # 全局 table_path 仅用于兼容旧格式（根目录单一表格）
         global_table_path = folder_info.get("table_path")
-        # 判断是否为"每患者独立表格"模式：所有患者都有各自的 table_path
-        per_patient_tables = all(
-            pdata.get("table_path") for pdata in patients.values()
+        # 判断是否为"每患者独立表格"模式：大多数患者有各自的 table_path
+        per_patient_tables = (
+            sum(1 for pdata in patients.values() if pdata.get("table_path"))
+            > len(patients) * 0.5
         )
         global_table_data: Dict[str, Any] = {}
         if global_table_path and not per_patient_tables:
@@ -1040,62 +1088,111 @@ class ReactMedicalAgent(AgentBase):
             "output_dir": out_dir,
         }
 
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        entities_csv = os.path.join(out_dir, f"entities_{ts}.csv")
+        patients_csv = os.path.join(out_dir, f"patients_{ts}.csv")
+        _csv_lock = asyncio.Lock()
+        _entities_header_written = [False]
+        _patients_header_written = [False]
+
+        async def _append_patient_csv(pid: str, patient_result: Dict) -> None:
+            """病人完成后立即追加写入 entities 和 patients CSV。"""
+            ent_rows = []
+            for ent in patient_result.get("merged_entities", []):
+                row = {"patient_id": pid}
+                row.update(ent)
+                ent_rows.append(row)
+
+            structured = patient_result.get("structured_data", {})
+            pat_row = {
+                "patient_id": pid,
+                "file_count": patient_result.get("file_count", 0),
+                "processed_count": patient_result.get("processed_count", 0),
+                "failed_count": patient_result.get("failed_count", 0),
+                "entity_count": len(patient_result.get("merged_entities", [])),
+                "categories": "; ".join(patient_result.get("categories", [])),
+                "labevents_count": len(structured.get("labevents", [])),
+                "diagnoses_count": len(structured.get("diagnoses_icd", [])),
+                "prescriptions_count": len(structured.get("prescriptions", [])),
+                "structured_tables": "; ".join(structured.keys()),
+            }
+
+            async with _csv_lock:
+                # 追加写 entities CSV
+                if ent_rows:
+                    # 固定列顺序，确保所有病人行与表头对齐
+                    ent_cols = ["patient_id", "name", "category", "source_file",
+                                "unit", "source_category", "value"]
+                    mode = "w" if not _entities_header_written[0] else "a"
+                    with open(entities_csv, mode, encoding="utf-8-sig", newline="") as f:
+                        writer = csv.DictWriter(f, fieldnames=ent_cols, extrasaction="ignore")
+                        if not _entities_header_written[0]:
+                            writer.writeheader()
+                            _entities_header_written[0] = True
+                        writer.writerows(ent_rows)
+
+                # 追加写 patients CSV
+                pat_cols = list(pat_row.keys())
+                mode = "w" if not _patients_header_written[0] else "a"
+                with open(patients_csv, mode, encoding="utf-8-sig", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=pat_cols, extrasaction="ignore")
+                    if not _patients_header_written[0]:
+                        writer.writeheader()
+                        _patients_header_written[0] = True
+                    writer.writerow(pat_row)
+
+            if self.verbose:
+                print(f"[{self.name}] [Dir] 患者 {pid} 已保存（实体 {len(ent_rows)} 条）")
+
+        # 表格数据在 _process_patient 里只存档不参与计算，跳过预加载节省时间
+        preloaded_tables: Dict[str, Dict] = {}
+
         async def _process_one(pid: str, pdata: Dict[str, Any]) -> tuple:
             if self.verbose:
                 print(f"\n[{self.name}] [Dir] 患者 {pid} ({pdata['file_count']} 个文件)")
-            if per_patient_tables and pdata.get("table_path"):
-                tbl = load_excel_table(pdata["table_path"])
-                pt = next(iter(tbl["data"].values()), {}) if tbl.get("success") and tbl.get("data") else {}
-                if self.verbose and pt:
-                    print(f"[{self.name}] [Dir] 患者 {pid} 表格加载: {len(pt)} 列")
+            if per_patient_tables:
+                pt = preloaded_tables.get(pid, {})
             else:
                 pt = get_patient_row(global_table_data, pid) if global_table_data else {}
-            return pid, await self._process_patient(pid, pdata, pt)
+            result = await self._process_patient(pid, pdata, pt)
+            await _append_patient_csv(pid, result)  # 完成后立即持久化
+            return pid, result
 
-        patient_results = await asyncio.gather(
-            *[_process_one(pid, pdata) for pid, pdata in patients.items()],
-            return_exceptions=False,
+        patient_list = list(patients.items())
+        # 活跃病人数 = concurrency * 4，充分利用 LLM 并发槽
+        _patient_sem = asyncio.Semaphore(self._concurrency * 4)
+
+        async def _process_one_limited(pid: str, pdata: Dict[str, Any]) -> tuple:
+            async with _patient_sem:
+                return await _process_one(pid, pdata)
+
+        patient_bar = _tqdm_module.tqdm(
+            total=len(patient_list),
+            desc="病人处理进度",
+            unit="人",
+            colour="green",
+            dynamic_ncols=True,
         )
+        patient_results = []
+        futs = [asyncio.ensure_future(_process_one_limited(pid, pdata))
+                for pid, pdata in patient_list]
+        for fut in asyncio.as_completed(futs):
+            pid, result = await fut
+            patient_bar.update(1)
+            patient_bar.set_postfix_str(f"最近: {pid}", refresh=False)
+            patient_results.append((pid, result))
+        patient_bar.close()
+
         for pid, patient_result in patient_results:
             all_results["patients"][pid] = patient_result
             all_results["statistics"]["processed_files"] += patient_result.get("processed_count", 0)
             all_results["statistics"]["failed_files"] += patient_result.get("failed_count", 0)
 
-        # 保存汇总 JSON
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 保存汇总 JSON（等全部完成后写）
         summary_path = os.path.join(out_dir, f"summary_{ts}.json")
         save_result_json(all_results, summary_path)
 
-        # 导出 CSV：实体明细表
-        entities_rows = []
-        for pid, pdata in all_results["patients"].items():
-            for ent in pdata.get("merged_entities", []):
-                row = {"patient_id": pid}
-                row.update(ent)
-                entities_rows.append(row)
-        entities_csv = os.path.join(out_dir, f"entities_{ts}.csv")
-        if entities_rows:
-            save_rows_to_csv(entities_rows, entities_csv)
-
-        # 导出 CSV：患者统计表
-        patient_rows = []
-        for pid, pdata in all_results["patients"].items():
-            structured = pdata.get("structured_data", {})
-            patient_rows.append({
-                "patient_id": pid,
-                "file_count": pdata.get("file_count", 0),
-                "processed_count": pdata.get("processed_count", 0),
-                "failed_count": pdata.get("failed_count", 0),
-                "entity_count": len(pdata.get("merged_entities", [])),
-                "categories": "; ".join(pdata.get("categories", [])),
-                "labevents_count": len(structured.get("labevents", [])),
-                "diagnoses_count": len(structured.get("diagnoses_icd", [])),
-                "prescriptions_count": len(structured.get("prescriptions", [])),
-                "structured_tables": "; ".join(structured.keys()),
-            })
-        patients_csv = os.path.join(out_dir, f"patients_{ts}.csv")
-        save_rows_to_csv(patient_rows, patients_csv)
-
+        # entities CSV 和 patients CSV 已在每个病人完成时实时写入
         all_results["output_entities_csv"] = entities_csv
         all_results["output_patients_csv"] = patients_csv
 
@@ -1294,7 +1391,264 @@ class ReactMedicalAgent(AgentBase):
             print(f"[{self.name}] [Dir] 住院宽表: {admission_wide_csv}")
             print(f"[{self.name}] [Dir] 实体长表: {entities_long_csv}")
 
+        # ── 回填：将实体写入每个病人的模板 CSV ────────────────────────────
+        await self._fill_template_csvs(dir_path, entities_csv, all_results)
+
         return all_results
+
+    # ── 流水线模式（批量 OCR → 并发 LLM 抽取 → 回填）─────────────────
+
+    @staticmethod
+    def _do_ocr_task(item: tuple) -> tuple:
+        """线程池任务：(pid, path, filename) → (pid, filename, text)"""
+        pid, path, filename = item
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            # 每个线程独立创建轻量引擎（onnxruntime 线程内使用 intra=1 线程）
+            engine = RapidOCR(
+                det_ort_config={"intra_op_num_threads": 1, "inter_op_num_threads": 1},
+                rec_ort_config={"intra_op_num_threads": 1, "inter_op_num_threads": 1},
+                cls_ort_config={"intra_op_num_threads": 1, "inter_op_num_threads": 1},
+            )
+            result, _ = engine(path)
+            if not result:
+                return pid, filename, ""
+            text = "\n".join(r[1] for r in result if len(r) >= 2)
+            text = re.sub(r"\r\n|\r", "\n", text)
+            text = re.sub(r"[ \t]+", " ", text)
+            text = re.sub(r"\n{3,}", "\n\n", text).strip()
+            return pid, filename, text
+        except Exception:
+            return pid, filename, ""
+
+    async def _run_pipeline(self, dir_path: str) -> Dict[str, Any]:
+        """
+        流水线模式主流程：
+          Step 1: 多线程批量 OCR（可选，有缓存则跳过）
+          Step 2: 并发 LLM 抽取
+          Step 3: 回填表格（可选）
+        """
+        from tools_v2.explore_tools import scan_directory
+        from tools_v2.extract_tools import extract_from_text
+        from tools_v2.io_tools import save_rows_to_csv, save_result_json
+
+        out_dir = self._resolve_output_dir(dir_path)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # ── Step 1: OCR ─────────────────────────────────────────────
+        cache_path = self._ocr_cache or os.path.join(out_dir, "ocr_cache.json")
+
+        if self._ocr_cache and os.path.exists(self._ocr_cache):
+            print(f"[{self.name}] [Pipeline] 使用已有 OCR 缓存: {self._ocr_cache}")
+            with open(self._ocr_cache, "r", encoding="utf-8") as f:
+                ocr_cache: Dict[str, Dict[str, str]] = json.load(f)
+            print(f"[{self.name}] [Pipeline] 加载 {len(ocr_cache)} 个病人的 OCR 结果")
+        else:
+            print(f"[{self.name}] [Pipeline] 扫描目录: {dir_path}")
+            info = scan_directory(dir_path)
+            patients = info.get("patients", {})
+            all_imgs = [
+                (pid, f["path"], f["filename"])
+                for pid, pdata in patients.items()
+                for f in pdata.get("files", [])
+                if f.get("file_type") == "image"
+            ]
+            print(f"\n{'='*60}")
+            print(f"[{self.name}] Step 1: OCR ({len(all_imgs)} 张图片, {self._ocr_workers} 线程)")
+            print(f"{'='*60}")
+
+            ocr_cache = {}
+            success_count = 0
+            fail_count = 0
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self._ocr_workers) as pool:
+                for pid, filename, text in _tqdm_module.tqdm(
+                    pool.map(self._do_ocr_task, all_imgs),
+                    total=len(all_imgs),
+                    desc="OCR进度",
+                    unit="张",
+                    dynamic_ncols=True,
+                ):
+                    if text:
+                        ocr_cache.setdefault(pid, {})[filename] = text
+                        success_count += 1
+                    else:
+                        fail_count += 1
+
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(ocr_cache, f, ensure_ascii=False)
+            print(f"[{self.name}] [Pipeline] OCR 完成: 成功 {success_count}, 失败 {fail_count}")
+            print(f"[{self.name}] [Pipeline] 缓存保存到: {cache_path}")
+
+        # ── Step 2: LLM 并发抽取 ─────────────────────────────────────
+        total_texts = sum(len(v) for v in ocr_cache.values())
+        print(f"\n{'='*60}")
+        print(f"[{self.name}] Step 2: LLM 抽取 ({total_texts} 条文本, {self._concurrency} 并发)")
+        print(f"{'='*60}")
+
+        all_tasks: List[Dict] = []
+        for pid, texts in ocr_cache.items():
+            for filename, text in texts.items():
+                if text and len(text.strip()) >= 50:
+                    all_tasks.append({"pid": pid, "filename": filename, "text": text})
+        print(f"[{self.name}] [Pipeline] 有效文本: {len(all_tasks)} 条")
+
+        entities_by_patient: Dict[str, List[Dict]] = {}
+        _lock = asyncio.Lock()
+        ext_stats = {"success": 0, "failed": 0}
+
+        async def _extract_one(task: Dict) -> None:
+            pid = task["pid"]
+            filename = task["filename"]
+            text = task["text"]
+            async with self._get_sem():
+                result = await extract_from_text(text)
+            async with _lock:
+                if result.get("success") and result.get("entities"):
+                    for ent in result["entities"]:
+                        ent["source_file"] = filename
+                        ent["source_category"] = "ocr"
+                    entities_by_patient.setdefault(pid, []).extend(result["entities"])
+                    ext_stats["success"] += 1
+                else:
+                    ext_stats["failed"] += 1
+
+        bar = _tqdm_module.tqdm(
+            total=len(all_tasks), desc="LLM抽取", unit="条", dynamic_ncols=True
+        )
+        futs = [asyncio.ensure_future(_extract_one(t)) for t in all_tasks]
+        for fut in asyncio.as_completed(futs):
+            await fut
+            bar.update(1)
+        bar.close()
+
+        total_entities = sum(len(v) for v in entities_by_patient.values())
+        print(
+            f"[{self.name}] [Pipeline] 抽取完成: "
+            f"成功 {ext_stats['success']}, 失败 {ext_stats['failed']}, "
+            f"总实体 {total_entities}"
+        )
+
+        # 保存 entities CSV
+        entities_csv = os.path.join(out_dir, f"entities_{ts}.csv")
+        ent_rows = []
+        for pid, ents in entities_by_patient.items():
+            for ent in ents:
+                row = {"patient_id": pid}
+                row.update(ent)
+                ent_rows.append(row)
+
+        if ent_rows:
+            ent_cols = ["patient_id", "name", "category", "value", "unit",
+                        "source_file", "source_category"]
+            all_keys: set = set()
+            for r in ent_rows:
+                all_keys.update(r.keys())
+            for k in all_keys:
+                if k not in ent_cols:
+                    ent_cols.append(k)
+            save_rows_to_csv(ent_rows, entities_csv, columns=ent_cols)
+            print(f"[{self.name}] [Pipeline] 实体 CSV: {entities_csv}")
+
+        # 保存 patients CSV
+        patients_csv = os.path.join(out_dir, f"patients_{ts}.csv")
+        pat_rows = []
+        for pid in ocr_cache.keys():
+            ents = entities_by_patient.get(pid, [])
+            pat_rows.append({
+                "patient_id": pid,
+                "ocr_file_count": len(ocr_cache[pid]),
+                "entity_count": len(ents),
+                "categories": "; ".join(set(e.get("category", "") for e in ents)),
+            })
+        save_rows_to_csv(pat_rows, patients_csv)
+        print(f"[{self.name}] [Pipeline] 患者 CSV: {patients_csv}")
+
+        # ── Step 3: 回填 ─────────────────────────────────────────────
+        if not self._no_fill and ent_rows:
+            print(f"\n{'='*60}")
+            print(f"[{self.name}] Step 3: 回填表格")
+            print(f"{'='*60}")
+            await self._fill_template_csvs(
+                dir_path,
+                entities_csv,
+                {"output_dir": out_dir},
+            )
+
+        summary = {
+            "success": True,
+            "data_type": "directory",
+            "pipeline_mode": True,
+            "processed_at": datetime.now().isoformat(),
+            "statistics": {
+                "total_patients": len(ocr_cache),
+                "total_ocr_texts": total_texts,
+                "extracted_texts": ext_stats["success"],
+                "failed_texts": ext_stats["failed"],
+                "total_entities": total_entities,
+            },
+            "output_dir": out_dir,
+            "ocr_cache": cache_path,
+            "entities_csv": entities_csv,
+            "patients_csv": patients_csv,
+        }
+        save_result_json(summary, os.path.join(out_dir, f"summary_{ts}.json"))
+
+        print(f"\n{'='*60}")
+        print(f"[{self.name}] [Pipeline] 全部完成! 输出目录: {out_dir}")
+        print(f"{'='*60}")
+        return summary
+
+    # ── 回填模板 CSV ──────────────────────────────────────────────────
+
+    async def _fill_template_csvs(
+        self,
+        dir_path: str,
+        entities_csv: str,
+        all_results: Dict[str, Any],
+    ) -> None:
+        """
+        将实体 CSV 中的抽取结果与每个病人目录下的模板 CSV 合并，
+        把合并结果写到本次运行的 out_dir/<patient_id>/ 下。
+        原始模板 CSV 不做任何修改。
+        """
+        try:
+            import sys as _sys
+            _agent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if _agent_dir not in _sys.path:
+                _sys.path.insert(0, _agent_dir)
+            from fill_table import run as fill_run
+        except ImportError as e:
+            if self.verbose:
+                print(f"[{self.name}] [Fill] 跳过回填（导入 fill_table 失败: {e}）")
+            return
+
+        if not os.path.exists(entities_csv):
+            if self.verbose:
+                print(f"[{self.name}] [Fill] 跳过回填（实体 CSV 不存在: {entities_csv}）")
+            return
+
+        # 合并结果写到本次 out_dir 下的 filled_tables/ 子目录
+        out_dir = all_results.get("output_dir", "")
+        filled_dir = os.path.join(out_dir, "filled_tables") if out_dir else ""
+        if not filled_dir:
+            if self.verbose:
+                print(f"[{self.name}] [Fill] 跳过回填（无法确定输出目录）")
+            return
+
+        if self.verbose:
+            print(f"\n[{self.name}] [Fill] 开始合并模板 CSV → {filled_dir}")
+
+        results_dir = os.path.dirname(entities_csv)
+        await fill_run(
+            reorg_dir=dir_path,
+            results_dir=results_dir,
+            output_dir=filled_dir,
+            use_llm=self.use_llm,
+            dry_run=False,
+            verbose=self.verbose,
+        )
+
+        all_results["fill_template_csv"] = filled_dir
 
     # notes/ 下 CSV 需要做文本抽取的列名
     _NOTES_TEXT_COLS = ("text", "report_text", "notes", "findings", "impression", "description")
@@ -1318,56 +1672,62 @@ class ReactMedicalAgent(AgentBase):
             "merged_entities": [],
         }
 
-        # ── 1. 处理 OCR 图片 ──────────────────────────────────────────
-        for finfo in pdata.get("files", []):
+        # ── 1. 处理 OCR 图片（并发）────────────────────────────────────
+        async def _process_file(finfo: Dict) -> Dict:
             fpath = finfo["path"]
             ftype = finfo.get("file_type", "unknown")
             category = finfo.get("category", "unknown")
-
             try:
-                if ftype == "image":     
-                    continue
-                    # res = await self._run_image(fpath)
+                # LLM 信号量由各子方法在实际调用 LLM 处获取，
+                # 避免 OCR 阶段长期占用 LLM 并发槽
+                if ftype == "image":
+                    res = await self._run_image(fpath)
                 elif ftype == "text":
                     res = await self._run_text(fpath)
                 else:
                     res = {"success": False, "error": f"不支持的类型: {ftype}"}
-
-                file_entry: Dict[str, Any] = {
-                    "path": fpath,
-                    "filename": os.path.basename(fpath),
-                    "category": category,
-                    "file_type": ftype,
-                    "success": res.get("success", False),
-                }
-
-                if res.get("success"):
-                    patient_result["processed_count"] += 1
-                    if res.get("ocr_text"):
-                        file_entry["ocr_text"] = res["ocr_text"]
-                    if res.get("cleaned_text"):
-                        file_entry["cleaned_text"] = res["cleaned_text"]
-
-                    ext = res.get("extraction_result", {})
-                    if isinstance(ext, dict) and ext.get("entities"):
-                        file_entry["entities"] = ext["entities"]
-                        for ent in ext["entities"]:
-                            ec = {**ent, "source_file": os.path.basename(fpath), "source_category": category}
-                            patient_result["merged_entities"].append(ec)
-                else:
-                    patient_result["failed_count"] += 1
-                    file_entry["error"] = res.get("error", "处理失败")
-
-                patient_result["files"].append(file_entry)
-
             except Exception as e:
-                patient_result["failed_count"] += 1
-                patient_result["files"].append({
-                    "path": fpath, "filename": os.path.basename(fpath),
-                    "category": category, "success": False, "error": str(e),
-                })
                 if self.verbose:
                     print(f"    ❌ {os.path.basename(fpath)}: {e}")
+                return {"path": fpath, "filename": os.path.basename(fpath),
+                        "category": category, "file_type": ftype,
+                        "success": False, "error": str(e)}
+
+            file_entry: Dict[str, Any] = {
+                "path": fpath,
+                "filename": os.path.basename(fpath),
+                "category": category,
+                "file_type": ftype,
+                "success": res.get("success", False),
+            }
+            if res.get("success"):
+                if res.get("ocr_text"):
+                    file_entry["ocr_text"] = res["ocr_text"]
+                if res.get("cleaned_text"):
+                    file_entry["cleaned_text"] = res["cleaned_text"]
+                ext = res.get("extraction_result", {})
+                if isinstance(ext, dict) and ext.get("entities"):
+                    file_entry["entities"] = ext["entities"]
+            else:
+                file_entry["error"] = res.get("error", "处理失败")
+            return file_entry
+
+        file_list = pdata.get("files", [])
+
+        file_results = await asyncio.gather(
+            *[_process_file(fi) for fi in file_list]
+        )
+        for file_entry in file_results:
+            if file_entry.get("success"):
+                patient_result["processed_count"] += 1
+                fpath = file_entry["path"]
+                category = file_entry["category"]
+                for ent in file_entry.get("entities", []):
+                    ec = {**ent, "source_file": os.path.basename(fpath), "source_category": category}
+                    patient_result["merged_entities"].append(ec)
+            else:
+                patient_result["failed_count"] += 1
+            patient_result["files"].append(file_entry)
 
         # ── 2. 处理 table/ 目录下的所有数据 ──────────────────────────
         table_path = pdata.get("table_path")

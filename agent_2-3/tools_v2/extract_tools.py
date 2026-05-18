@@ -14,7 +14,6 @@ import os
 import sys
 import json
 import asyncio
-import re
 from typing import Any, Dict, List, Optional
 
 _HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -36,59 +35,33 @@ from config import get_api_config
 # 内部 LLM 调用
 # ---------------------------------------------------------------------------
 
-_llm_clients: Dict[tuple[str, str], Any] = {}
-_embedding_client: Optional[Any] = None
+_llm_client: Optional[Any] = None  # 复用单个 AsyncOpenAI client
 
 
-def _strip_thinking_text(text: Optional[str]) -> Optional[str]:
-    if not text:
-        return text
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
-
-
-def _get_llm_client(api_key: str, api_base: str) -> Any:
-    cache_key = (api_key, api_base)
-    if cache_key not in _llm_clients:
-        import openai
-        _llm_clients[cache_key] = openai.AsyncOpenAI(api_key=api_key, base_url=api_base)
-    return _llm_clients[cache_key]
-
-
-def _get_embedding_client() -> Any:
-    global _embedding_client
-    if _embedding_client is None:
+def _get_llm_client() -> Any:
+    global _llm_client
+    if _llm_client is None:
         import openai
         cfg = get_api_config()
-        _embedding_client = openai.AsyncOpenAI(
-            api_key=cfg["embedding_api_key"],
-            base_url=cfg["embedding_api_base"],
-        )
-    return _embedding_client
+        _llm_client = openai.AsyncOpenAI(api_key=cfg["api_key"], base_url=cfg["api_base"])
+    return _llm_client
 
 
 async def _call_llm(prompt: str, model_name: Optional[str] = None) -> Optional[str]:
     """通用 LLM 调用，返回原始文本响应。"""
-    cfg = get_api_config()
-    chat_api_keys = cfg.get("chat_api_keys") or [cfg.get("api_key")]
-    chat_api_keys = [key for key in chat_api_keys if key]
-    if not chat_api_keys:
+    try:
+        cfg = get_api_config()
+        if not cfg["api_key"]:
+            return None
+        client = _get_llm_client()
+        resp = await client.chat.completions.create(
+            model=model_name or cfg["model_name"],
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+        )
+        return resp.choices[0].message.content.strip() if resp.choices else None
+    except Exception:
         return None
-
-    for api_key in chat_api_keys:
-        try:
-            client = _get_llm_client(api_key, cfg["api_base"])
-            resp = await client.chat.completions.create(
-                model=model_name or cfg["model_name"],
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-            )
-            content = resp.choices[0].message.content if resp.choices else None
-            cleaned = _strip_thinking_text(content)
-            if cleaned:
-                return cleaned
-        except Exception:
-            continue
-    return None
 
 
 def _parse_json_response(content: str) -> Optional[Dict]:
@@ -311,6 +284,7 @@ def extract_from_text_sync(text: str, max_chars: int = 4000) -> Dict[str, Any]:
 # 实体名称语义聚类（Embedding + 层次聚类）
 # ---------------------------------------------------------------------------
 
+_EMBED_MODEL = "text-embedding-3-small"
 _CLUSTER_THRESHOLD = 0.25  # 距离阈值，对应余弦相似度 > 0.75
 
 
@@ -318,10 +292,10 @@ async def _get_embeddings(texts: List[str]) -> Optional[List[List[float]]]:
     """批量获取文本 embedding，返回向量列表。"""
     try:
         cfg = get_api_config()
-        if not cfg["embedding_api_key"]:
+        if not cfg["api_key"]:
             return None
-        client = _get_embedding_client()
-        resp = await client.embeddings.create(model=cfg["embedding_model"], input=texts)
+        client = _get_llm_client()
+        resp = await client.embeddings.create(model=_EMBED_MODEL, input=texts)
         return [d.embedding for d in resp.data]
     except Exception:
         return None

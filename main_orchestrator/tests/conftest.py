@@ -12,6 +12,7 @@ for path in (
     ORCHESTRATOR_DIR / "execution",
     ORCHESTRATOR_DIR / "memory",
     PROJECT_ROOT / "step-1",
+    PROJECT_ROOT / "step-4",
 ):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))

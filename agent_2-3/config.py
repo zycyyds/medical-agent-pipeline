@@ -5,15 +5,21 @@
 所有路径、API 配置、枚举类型、处理管线定义集中在此处。
 """
 import os
+import sys
+from pathlib import Path
 from enum import Enum
-from typing import Dict, List, Set
+from typing import Any, Dict, List, Set
 
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 try:
     from configs.loader import get_agent_config
-except Exception:
+except Exception:  # pragma: no cover - keeps the legacy standalone path usable
     get_agent_config = None
 
 
@@ -87,43 +93,85 @@ def get_skip_folders() -> Set[str]:
 # API 配置
 # ---------------------------------------------------------------------------
 
-def get_api_config() -> Dict:
-    agent_cfg = get_agent_config("agent_2_3") if get_agent_config else {}
-    embedding_cfg = agent_cfg.get("embedding") or {}
+def _agent23_config() -> Dict[str, Any]:
+    if get_agent_config is None:
+        return {}
+    return dict(get_agent_config("agent_2_3") or {})
 
-    chat_api_key = os.environ.get("AGENT23_CHAT_API_KEY") or agent_cfg.get("api_key", "")
-    chat_api_keys_raw = os.environ.get("AGENT23_CHAT_API_KEYS") or agent_cfg.get("api_keys") or chat_api_key
-    if isinstance(chat_api_keys_raw, list):
-        chat_api_keys = [str(k).strip() for k in chat_api_keys_raw if str(k).strip()]
-    else:
-        chat_api_keys = [k.strip() for k in str(chat_api_keys_raw or "").split(",") if k.strip()]
-    if not chat_api_keys and chat_api_key:
-        chat_api_keys = [chat_api_key]
-    chat_api_key = chat_api_keys[0] if chat_api_keys else ""
-    chat_api_base = os.environ.get("AGENT23_CHAT_API_BASE") or agent_cfg.get("base_url") or "https://api.openai.com/v1"
-    chat_model = os.environ.get("AGENT23_CHAT_MODEL") or agent_cfg.get("model") or "gpt-4.1-mini"
 
-    embed_api_key = os.environ.get("AGENT23_EMBED_API_KEY") or embedding_cfg.get("api_key", "")
-    embed_api_base = os.environ.get("AGENT23_EMBED_API_BASE") or embedding_cfg.get("base_url") or chat_api_base
-    embed_model = os.environ.get("AGENT23_EMBED_MODEL") or embedding_cfg.get("model") or "text-embedding-3-small"
+def _int_value(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
+
+def get_api_config() -> Dict[str, Any]:
+    """Chat/LLM config for Agent2-3.
+
+    YAML is the primary source. Legacy environment variables are kept as
+    fallback so old standalone scripts do not silently break.
+    """
+    cfg = _agent23_config()
     return {
-        # Chat/extraction API for Step2-3 only.
-        "api_key":    chat_api_key,
-        "api_base":   chat_api_base,
-        "model_name": chat_model,
-        "chat_api_key": chat_api_key,
-        "chat_api_keys": chat_api_keys,
-        "chat_api_base": chat_api_base,
-        "chat_model": chat_model,
+        "api_key": (
+            os.environ.get("AGENT_2_3_API_KEY")
+            or cfg.get("api_key")
+            or os.environ.get("OPENAI_API_KEYS", "")
+        ),
+        "api_base": (
+            os.environ.get("AGENT_2_3_BASE_URL")
+            or cfg.get("api_base")
+            or cfg.get("base_url")
+            or os.environ.get("YUNWU_BASE_URL", "")
+        ),
+        "timeout": _int_value(
+            os.environ.get("AGENT_2_3_TIMEOUT") or cfg.get("timeout") or os.environ.get("OPENAI_TIMEOUT"),
+            120,
+        ),
+        "model_name": (
+            os.environ.get("AGENT_2_3_MODEL")
+            or os.environ.get("MODEL_NAME")
+            or cfg.get("model_name")
+            or cfg.get("model")
+            or "gpt-5.4-nano"
+        ),
+        "temperature": float(cfg.get("temperature", 0.0) or 0.0),
+        "seed": cfg.get("seed", 666),
+        "use_umls": os.environ.get("USE_UMLS", "true").lower() == "true",
+        "verbose": os.environ.get("VERBOSE", "false").lower() == "true",
+    }
 
-        # Embedding API for Step2-3 only. Keep this separate from chat because
-        # some OpenAI-compatible chat providers do not support embeddings.
-        "embedding_api_key": embed_api_key,
-        "embedding_api_base": embed_api_base,
-        "embedding_model": embed_model,
 
-        "timeout":    int(os.environ.get("OPENAI_TIMEOUT", "120")),
-        "use_umls":   os.environ.get("USE_UMLS", "true").lower() == "true",
-        "verbose":    os.environ.get("VERBOSE", "false").lower() == "true",
+def get_embedding_config() -> Dict[str, Any]:
+    """Embedding config for Agent2-3 semantic clustering.
+
+    This intentionally does not reuse the chat model endpoint because many
+    OpenAI-compatible chat providers do not expose embeddings.
+    """
+    cfg = _agent23_config()
+    emb = dict(cfg.get("embedding") or {})
+    return {
+        "api_key": (
+            os.environ.get("AGENT_2_3_EMBEDDING_API_KEY")
+            or emb.get("api_key")
+            or ""
+        ),
+        "api_base": (
+            os.environ.get("AGENT_2_3_EMBEDDING_BASE_URL")
+            or emb.get("api_base")
+            or emb.get("base_url")
+            or ""
+        ),
+        "timeout": _int_value(
+            os.environ.get("AGENT_2_3_EMBEDDING_TIMEOUT") or emb.get("timeout"),
+            120,
+        ),
+        "model_name": (
+            os.environ.get("AGENT_2_3_EMBEDDING_MODEL")
+            or emb.get("model_name")
+            or emb.get("model")
+            or "text-embedding-3-small"
+        ),
+        "dimensions": emb.get("dimensions"),
     }

@@ -35,6 +35,17 @@ def _mentions_step1_only(lower: str) -> bool:
     return any(token in compact for token in ("只跑", "只运行", "只执行", "仅跑", "仅运行", "仅执行", "only"))
 
 
+def _mentions_step4(lower: str) -> bool:
+    compact = re.sub(r"[\s_\-—–]+", "", lower)
+    return (
+        "step4" in compact
+        or "agent4" in compact
+        or "第4步" in compact
+        or "第四步" in compact
+        or "步骤4" in compact
+    )
+
+
 def _trim_to_existing_path(token: str, project_root: Path) -> str | None:
     candidate_text = token.strip().strip("\"'“”‘’")
     if not candidate_text:
@@ -64,7 +75,9 @@ def _extract_path_like_text(raw: str, project_root: Path) -> str:
         return cleaned
 
     direct = _resolve_path(cleaned, project_root)
-    if direct.exists() or cleaned.endswith(".json") or cleaned.endswith(".csv"):
+    if direct.exists():
+        return cleaned
+    if cleaned.endswith((".json", ".csv", ".xlsx", ".xls")) and not re.search(r"[\s，。；;：:]", cleaned):
         return cleaned
 
     absolute_candidates = re.findall(r"(/[^\s，。；;：:]+)", cleaned)
@@ -179,6 +192,14 @@ def route_task(user_input: str, project_root: str | Path | None = None) -> TaskS
             entry_artifacts={"input_path": str(path)},
             resume_from_step="step1",
             intent_summary="用户请求只运行 Step1。",
+        )
+
+    if _mentions_step4(lower):
+        return TaskSpec(
+            task_type=TaskType.RESUME_FROM_STEP2_3,
+            entry_artifacts={"input_csv": str(path)},
+            resume_from_step="step4",
+            intent_summary="用户请求运行 Step4 任务裁剪。",
         )
 
     return TaskSpec(

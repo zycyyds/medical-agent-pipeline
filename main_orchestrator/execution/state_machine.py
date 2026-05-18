@@ -21,7 +21,7 @@ from contracts import (
     WorkerResult,
     WorkerStatus,
 )
-from supervisors import ArtifactRepairSupervisor, LegacyStepSupervisor, Step1Supervisor
+from supervisors import ArtifactRepairSupervisor, LegacyStepSupervisor, Step1Supervisor, Step4Supervisor
 
 
 class StateMachineOrchestrator:
@@ -31,12 +31,14 @@ class StateMachineOrchestrator:
         context: str = "",
         enable_memory_agent: bool = True,
         step1_supervisor: Step1Supervisor | None = None,
+        step4_supervisor: Step4Supervisor | None = None,
         legacy_supervisor: LegacyStepSupervisor | None = None,
     ) -> None:
         self.task_spec = task_spec
         self.context = context
         self.enable_memory_agent = enable_memory_agent
         self.step1 = step1_supervisor or Step1Supervisor()
+        self.step4 = step4_supervisor or Step4Supervisor(memory_context=context)
         self.legacy = legacy_supervisor or LegacyStepSupervisor(
             context=context,
             enable_memory_agent=enable_memory_agent,
@@ -93,10 +95,15 @@ class StateMachineOrchestrator:
 
     async def _run_step4_to_end(self, seed_input: str | None = None) -> PipelineRunResult:
         input_data = seed_input or str(self.task_spec.entry_artifacts.get("input_csv") or self._input_path())
-        result = await self._run_step(PipelineState.STEP4_RUNNING, self.legacy.run_step4, input_data)
+        result = await self._run_step(PipelineState.STEP4_RUNNING, self.step4.run_from_input, input_data)
         if result.status != WorkerStatus.SUCCESS:
             return self._needs_repair(PipelineState.STEP4_RUNNING, result, PipelineState.STEP4_RUNNING)
-        return await self._run_step5_to_end(seed_input=input_data)
+        next_input = (
+            result.artifacts.get("next_input_csv")
+            or result.artifacts.get("filtered_csv_path")
+            or input_data
+        )
+        return await self._run_step5_to_end(seed_input=str(next_input))
 
     async def _run_step5_to_end(self, seed_input: str | None = None) -> PipelineRunResult:
         input_data = seed_input or str(self.task_spec.entry_artifacts.get("filtered_csv") or self._input_path())

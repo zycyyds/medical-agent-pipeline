@@ -1,4 +1,8 @@
-"""Agent 5 standalone entrypoint: data quality repair."""
+"""Agent 5 standalone entrypoint: data quality repair.
+
+Agent 5 is reserved for Step5 data cleaning / quality repair. Step4 task
+column selection now lives under agent_4 and step-4.
+"""
 
 import argparse
 import asyncio
@@ -9,9 +13,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-from agent_4.data_quality_repair import *  # noqa: F401,F403 - expose cleaning helpers through agent_5.
-from agent_4 import data_quality_repair as _repair
 
 
 def get_agent_root() -> str:
@@ -31,7 +32,18 @@ def get_default_workspace_dir() -> str:
 
 
 def get_default_validation_config_path() -> str:
-    return str(PROJECT_ROOT / "agent_4" / "validation_config.json")
+    return str(PROJECT_ROOT / "agent_5" / "validation_config.json")
+
+
+def _load_data_quality_repair_module():
+    try:
+        from agent_5 import data_quality_repair as repair_module
+    except ImportError as exc:
+        raise RuntimeError(
+            "Agent5 数据清洗模块尚未重新接入。当前边界已固定："
+            "Agent4/step-4 负责任务列筛选，Agent5 只负责后续数据清洗。"
+        ) from exc
+    return repair_module
 
 
 async def run_data_quality_repair_standalone(
@@ -39,7 +51,8 @@ async def run_data_quality_repair_standalone(
     workspace_dir: str | None = None,
     validation_config_path: str | None = None,
 ) -> dict:
-    return await _repair.run_data_quality_repair(
+    repair = _load_data_quality_repair_module()
+    return await repair.run_data_quality_repair(
         input_dir=input_dir or get_default_input_dir(),
         workspace_dir=workspace_dir or get_default_workspace_dir(),
         validation_config_path=validation_config_path or get_default_validation_config_path(),
@@ -70,14 +83,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> dict:
     args = _build_parser().parse_args(argv)
+    repair = _load_data_quality_repair_module()
     result = asyncio.run(
-        run_data_quality_repair_standalone(
+        repair.run_data_quality_repair(
             input_dir=args.input,
             workspace_dir=args.output,
             validation_config_path=args.validation_config,
         )
     )
-    print(_repair.format_run_summary(result))
+    print(repair.format_run_summary(result))
     return result
 
 

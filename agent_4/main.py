@@ -1,24 +1,25 @@
-"""Agent 4 standalone entrypoint: task-oriented column clipping.
+"""Agent 4 standalone entrypoint for Step4 task-oriented column clipping.
 
-The implementation stays in ``agent_5.medical_column_selector`` for now to keep
-the code move small. This file defines the Agent 4-facing defaults and CLI.
+The executable Step4 logic lives in ``step-4`` and is shared with the main
+orchestrator handoff path. This module only keeps Agent4-facing defaults and CLI.
 """
 
 import argparse
+import asyncio
 import os
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+ORCHESTRATOR_DIR = PROJECT_ROOT / "main_orchestrator"
+EXECUTION_DIR = ORCHESTRATOR_DIR / "execution"
+STEP4_DIR = PROJECT_ROOT / "step-4"
+for path in (PROJECT_ROOT, ORCHESTRATOR_DIR, EXECUTION_DIR, STEP4_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
-from agent_4.data_quality_repair import *  # noqa: F401,F403 - keep old imports compatible.
-from agent_5.medical_column_selector.main import (
-    TaskDrivenColumnSelector,
-    get_default_task_text,
-    resolve_input_csv,
-)
+from step4_runtime import get_default_output_root, resolve_step4_task_text  # noqa: E402
+from supervisors import Step4Supervisor  # noqa: E402
 
 
 def get_agent_root() -> str:
@@ -34,7 +35,7 @@ def get_default_input_dir() -> str:
 
 
 def get_default_output_dir() -> str:
-    return os.path.join(get_project_root(), "program", "output", "step4_results")
+    return get_default_output_root()
 
 
 def run_task_oriented_clipping(
@@ -42,14 +43,21 @@ def run_task_oriented_clipping(
     output_dir: str | None = None,
     task_text: str | None = None,
 ) -> dict:
-    input_csv = resolve_input_csv(input_path or get_default_input_dir())
-    target_output_dir = output_dir or get_default_output_dir()
-    selector = TaskDrivenColumnSelector()
-    return selector.run(
-        input_csv_path=input_csv,
-        task_text=task_text or get_default_task_text(),
-        output_dir=target_output_dir,
+    supervisor = Step4Supervisor(output_root=output_dir or get_default_output_dir())
+    result = asyncio.run(
+        supervisor.run_from_input(
+            input_path=input_path or get_default_input_dir(),
+            task_text=task_text,
+        )
     )
+    if result.status.value != "SUCCESS":
+        raise RuntimeError("; ".join(result.issues) or result.summary)
+    return {
+        "filtered_csv_path": result.artifacts["filtered_csv_path"],
+        "selection_report_path": result.artifacts["selection_report_path"],
+        "next_input_csv": result.artifacts.get("next_input_csv"),
+        "next_selection_report": result.artifacts.get("next_selection_report"),
+    }
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -69,7 +77,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--task",
         "-t",
-        default=get_default_task_text(),
+        default=resolve_step4_task_text()["task_text"],
         help="任务文本；也可通过 AGENT4_TASK_TEXT 环境变量设置。",
     )
     return parser

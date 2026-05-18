@@ -3,6 +3,8 @@
 OCR 工具（OCR Tools）
 
 使用 RapidOCR（本地离线）进行图像文字识别。
+若已安装 onnxruntime-gpu 且当前环境可用 CUDA，则自动使用 GPU（检测/方向/识别均走 CUDA EP）。
+设置环境变量 RAPIDOCR_USE_GPU=0 可强制只用 CPU。
 
 工具列表：
   - ocr_image        对单张图片进行 OCR，返回提取文本
@@ -21,11 +23,35 @@ if _HERE not in sys.path:
 # 模块级单例，避免重复加载模型
 _engine = None
 
+
+def _want_rapidocr_gpu() -> bool:
+    flag = os.environ.get("RAPIDOCR_USE_GPU", "1").strip().lower()
+    if flag in ("0", "false", "no", "off"):
+        return False
+    try:
+        import onnxruntime as ort
+
+        return (
+            "CUDAExecutionProvider" in ort.get_available_providers()
+            and ort.get_device() == "GPU"
+        )
+    except Exception:
+        return False
+
+
 def _get_engine():
     global _engine
     if _engine is None:
         from rapidocr_onnxruntime import RapidOCR
-        _engine = RapidOCR()
+
+        if _want_rapidocr_gpu():
+            _engine = RapidOCR(
+                det_use_cuda=True,
+                cls_use_cuda=True,
+                rec_use_cuda=True,
+            )
+        else:
+            _engine = RapidOCR()
     return _engine
 
 

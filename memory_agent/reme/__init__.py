@@ -1,2 +1,0 @@
-"""ReMe case-memory namespace."""
-

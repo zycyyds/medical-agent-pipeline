@@ -3,6 +3,8 @@
 OCR 工具（OCR Tools）
 
 使用 RapidOCR（本地离线）进行图像文字识别。
+若已安装 onnxruntime-gpu 且当前环境可用 CUDA，则自动使用 GPU（检测/方向/识别均走 CUDA EP）。
+设置环境变量 RAPIDOCR_USE_GPU=0 可强制只用 CPU。
 
 工具列表：
   - ocr_image        对单张图片进行 OCR，返回提取文本
@@ -21,11 +23,34 @@ if _HERE not in sys.path:
 # 模块级单例，避免重复加载模型
 _engine = None
 
+
+def _want_rapidocr_gpu() -> bool:
+    # GPU OCR 在多进程并发场景下 cudnn 冲突严重，强制用 CPU
+    # 112核机器 CPU OCR 并发完全够用
+    return False
+
+
+# 多进程场景下，按进程 ID 轮询分配 GPU，避免全部挤在同一块卡上 OOM
+_OCR_GPU_IDS = [int(x) for x in os.environ.get("RAPIDOCR_GPU_IDS", "1,2").split(",")]
+
+
+def _warmup_worker():
+    """进程池 worker 初始化时预热 OCR 引擎，避免第一个任务时才加载模型。"""
+    _get_engine()
+
+
 def _get_engine():
     global _engine
     if _engine is None:
+        import os as _os
+        # 限制每个进程的 onnxruntime 内部线程数，避免多进程时 CPU 过度争抢
+        _os.environ.setdefault("OMP_NUM_THREADS", "2")
         from rapidocr_onnxruntime import RapidOCR
-        _engine = RapidOCR()
+        _engine = RapidOCR(
+            det_ort_config={"intra_op_num_threads": 2, "inter_op_num_threads": 1},
+            rec_ort_config={"intra_op_num_threads": 2, "inter_op_num_threads": 1},
+            cls_ort_config={"intra_op_num_threads": 2, "inter_op_num_threads": 1},
+        )
     return _engine
 
 

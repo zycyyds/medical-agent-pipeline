@@ -1,2 +1,0 @@
-"""Playbook memory namespace."""
-

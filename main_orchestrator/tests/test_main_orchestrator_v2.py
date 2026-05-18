@@ -90,6 +90,16 @@ def test_route_natural_language_step1_hyphen_input(tmp_path):
     assert spec.entry_artifacts["input_path"] == str(sample.resolve())
 
 
+def test_route_natural_language_step4_input_csv(tmp_path):
+    input_csv = tmp_path / "input.csv"
+    input_csv.write_text("subject_id,value\n1,2\n", encoding="utf-8")
+
+    spec = orchestrator_module.route_task(f"请运行 step4 处理 {input_csv}", project_root=tmp_path)
+
+    assert spec.task_type == TaskType.RESUME_FROM_STEP2_3
+    assert spec.entry_artifacts["input_csv"] == str(input_csv.resolve())
+
+
 def test_route_extracts_absolute_path_from_chinese_sentence(tmp_path):
     sample = tmp_path / "mimic-mini"
     sample.mkdir()
@@ -169,7 +179,8 @@ def test_orchestrator_agent_uses_tool_result_instead_of_direct_handoff(monkeypat
 
             return FakeResponse()
 
-    def fake_create_agent(task_spec):
+    def fake_create_agent(task_spec, context=""):
+        assert context == ""
         created.append(task_spec)
         return FakeAgent()
 
@@ -204,6 +215,50 @@ def test_orchestrator_step1_missing_input_needs_repair():
     assert "input_path" in " ".join(result.repair_ticket.validator_errors)
 
 
+def test_orchestrator_agent_uses_step4_tool_result(monkeypatch, tmp_path):
+    created = []
+    input_csv = tmp_path / "input.csv"
+    input_csv.write_text("subject_id,value\n1,2\n", encoding="utf-8")
+
+    class FakeAgent:
+        async def __call__(self, _msg):
+            class FakeResponse:
+                def get_text_content(self):
+                    return ""
+
+            return FakeResponse()
+
+    def fake_create_agent(task_spec, context=""):
+        assert context == ""
+        created.append(task_spec)
+        return FakeAgent()
+
+    async def fake_collect_tool_results(_agent):
+        return {
+            "handoff_step4_from_task_spec_tool": [
+                WorkerResult.success(
+                    "step4 ok",
+                    artifacts={"filtered_csv_path": str(input_csv), "selection_report_path": str(tmp_path / "report.json")},
+                ).to_dict()
+            ]
+        }
+
+    monkeypatch.setattr(orchestrator_agent_module, "has_model_credentials", lambda _agent_key: True)
+    monkeypatch.setattr(orchestrator_agent_module, "create_orchestrator_agent", fake_create_agent)
+    monkeypatch.setattr(orchestrator_agent_module, "collect_tool_results", fake_collect_tool_results)
+    spec = TaskSpec(
+        task_type=TaskType.RESUME_FROM_STEP2_3,
+        entry_artifacts={"input_csv": str(input_csv)},
+        resume_from_step="step4",
+    )
+
+    result = asyncio.run(orchestrator_agent_module.run_with_orchestrator_agent(spec, enable_memory_agent=False))
+
+    assert result.status == WorkerStatus.SUCCESS
+    assert created == [spec]
+    assert result.states_visited[-1].value == "DONE"
+
+
 def test_step1_supervisor_delegates_to_handoff(monkeypatch, tmp_path):
     calls = []
 
@@ -232,5 +287,35 @@ def test_step1_supervisor_delegates_to_handoff(monkeypatch, tmp_path):
             "records_path": str(tmp_path / "records.json"),
             "output_root": str(tmp_path / "output"),
             "generated_script_path": str(tmp_path / "generated.py"),
+        }
+    ]
+
+
+def test_step4_supervisor_delegates_to_handoff(monkeypatch, tmp_path):
+    calls = []
+    input_csv = tmp_path / "input.csv"
+    input_csv.write_text("subject_id,value\n1,2\n", encoding="utf-8")
+
+    async def fake_handoff(**kwargs):
+        calls.append(kwargs)
+        return WorkerResult.failure(
+            summary="fake handoff stopped before validation",
+            status=supervisors_module.WorkerStatus.NEEDS_ESCALATION,
+            artifacts={"input_path": kwargs["input_path"]},
+        )
+
+    monkeypatch.setattr(supervisors_module, "run_step4_handoff", fake_handoff)
+    supervisor = supervisors_module.Step4Supervisor(output_root=tmp_path / "step4")
+
+    result = asyncio.run(supervisor.run_from_input(input_csv, task_text="demo task"))
+
+    assert result.status == supervisors_module.WorkerStatus.NEEDS_ESCALATION
+    assert calls == [
+        {
+            "task_type": "resume_from_step2_3",
+            "input_path": str(input_csv),
+            "output_root": str(tmp_path / "step4"),
+            "task_text": "demo task",
+            "memory_context": "",
         }
     ]

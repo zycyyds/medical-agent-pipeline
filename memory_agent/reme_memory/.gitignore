@@ -1,3 +1,4 @@
 cases/*.jsonl
 !cases/.gitkeep
-
+playbook_light/
+vector/

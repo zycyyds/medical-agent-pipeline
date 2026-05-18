@@ -14,7 +14,6 @@ import os
 import sys
 import json
 import asyncio
-import re
 from typing import Any, Dict, List, Optional
 
 _HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -31,49 +30,27 @@ if _OLD_ROOT not in sys.path:
 
 from config import get_api_config
 
-_llm_clients: Dict[tuple[str, str], Any] = {}
-
 
 # ---------------------------------------------------------------------------
 # 内部 LLM 调用
 # ---------------------------------------------------------------------------
 
-def _strip_thinking_text(text: Optional[str]) -> Optional[str]:
-    if not text:
-        return text
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
-
-
 async def _call_llm(prompt: str, model_name: Optional[str] = None) -> Optional[str]:
     """通用 LLM 调用，返回原始文本响应。"""
-    import openai
-    cfg = get_api_config()
-    chat_api_keys = cfg.get("chat_api_keys") or [cfg.get("api_key")]
-    chat_api_keys = [key for key in chat_api_keys if key]
-    if not chat_api_keys:
+    try:
+        import openai
+        cfg = get_api_config()
+        if not cfg["api_key"]:
+            return None
+        client = openai.AsyncOpenAI(api_key=cfg["api_key"], base_url=cfg["api_base"])
+        resp = await client.chat.completions.create(
+            model=model_name or cfg["model_name"],
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+        )
+        return resp.choices[0].message.content.strip() if resp.choices else None
+    except Exception:
         return None
-
-    for api_key in chat_api_keys:
-        try:
-            cache_key = (api_key, cfg["api_base"])
-            if cache_key not in _llm_clients:
-                _llm_clients[cache_key] = openai.AsyncOpenAI(
-                    api_key=api_key,
-                    base_url=cfg["api_base"],
-                )
-            client = _llm_clients[cache_key]
-            resp = await client.chat.completions.create(
-                model=model_name or cfg["model_name"],
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.0,
-            )
-            content = resp.choices[0].message.content if resp.choices else None
-            cleaned = _strip_thinking_text(content)
-            if cleaned:
-                return cleaned
-        except Exception:
-            continue
-    return None
 
 
 def _parse_json_response(content: str) -> Optional[Dict]:

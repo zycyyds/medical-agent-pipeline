@@ -27,21 +27,12 @@ import sys
 
 # 确保包路径可访问
 _HERE = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(_HERE)
 _EXAMPLES = os.path.dirname(_HERE)
 _AS_ROOT = os.path.abspath(os.path.join(_EXAMPLES, "../../"))
 _AS_SRC = os.path.join(_AS_ROOT, "src")
 for _p in [_HERE, _AS_SRC, _AS_ROOT]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
-
-
-def get_default_input_path() -> str:
-    return os.path.join(_HERE, "data_input")
-
-
-def get_default_output_dir() -> str:
-    return os.path.join(PROJECT_ROOT, "program", "output", "step2_3_results")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -54,13 +45,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--input", "-i",
         metavar="PATH",
-        help=f"输入文件或目录路径（默认: {get_default_input_path()}）",
+        help="输入文件或目录路径",
     )
     parser.add_argument(
         "--output", "-o",
         metavar="DIR",
-        default=get_default_output_dir(),
-        help=f"输出目录（默认: {get_default_output_dir()}）",
+        default="./output_v2",
+        help="输出目录（默认: ./output_v2）",
     )
     parser.add_argument(
         "--batch",
@@ -262,25 +253,29 @@ def main() -> None:
 
     os.makedirs(args.output, exist_ok=True)
     use_llm = not args.no_llm
-    input_path = args.input or get_default_input_path()
 
     if args.interactive:
         asyncio.run(
             _interactive_loop(args.output, use_llm, args.verbose, args.model)
         )
     elif args.batch:
+        if not args.input:
+            parser.error("批量模式需要 --input 目录")
         asyncio.run(
-            _batch_mode(input_path, args.output, use_llm, args.verbose, args.model)
+            _batch_mode(args.input, args.output, use_llm, args.verbose, args.model)
         )
-    else:
-        if not os.path.exists(input_path):
-            print(f"错误：路径不存在: {input_path}", file=sys.stderr)
+    elif args.input:
+        if not os.path.exists(args.input):
+            print(f"错误：路径不存在: {args.input}", file=sys.stderr)
             sys.exit(1)
         result = asyncio.run(
-            _process_single(input_path, args.output, use_llm, args.verbose, args.model)
+            _process_single(args.input, args.output, use_llm, args.verbose, args.model)
         )
         _print_result(result, args.verbose)
         sys.exit(0 if result.get("status") == "success" else 1)
+    else:
+        parser.print_help()
+        sys.exit(0)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ main_orchestrator/
 ├── agents/                   # TaskRouterAgent、OrchestratorAgent、AgentScope runtime helper
 ├── core/                     # TaskSpec / WorkerResult 契约、确定性 router、validator
 ├── execution/                # handoff adapter、Step supervisor、legacy state machine
-├── memory/                   # Playbook Memory Supervisor 接入
+├── memory/                   # ReMe Memory Supervisor 接入
 └── tests/                    # 主链路、handoff、router、Step1 runtime 边界测试
 ```
 
@@ -19,4 +19,4 @@ main_orchestrator/
 - `TaskRouterAgent` 负责把自然语言或路径转成 `TaskSpec`。
 - `OrchestratorAgent` 负责根据 `TaskSpec` 调用子 Agent handoff。
 - 当前只有 Step1 已接成 ReAct 子智能体；Step2-7 仍待后续以同样方式接入。
-- Memory 当前接入的是 Playbook pre-run/post-run，ReMe 仍保持独立 memory_agent 能力，暂不进入主链路。
+- Memory 当前通过 ReMe pre-run/post-run 接入主链路，只负责检索、总结和记录，不决定 Step 调度。
