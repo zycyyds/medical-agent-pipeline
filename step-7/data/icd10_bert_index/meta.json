@@ -1,0 +1,8 @@
+{
+  "model": "/Users/mkbk/PycharmProjects/step1-dataset-codegen/agent_6-7/models/bge-small-zh-v1.5",
+  "dim": 512,
+  "n_vectors": 35725,
+  "xlsx_path": "/Users/mkbk/PycharmProjects/step1-dataset-codegen/agent_6-7/ICD-10.xlsx",
+  "xlsx_mtime": 1776409705.3764548,
+  "built_at": "2026-04-24T12:25:11"
+}

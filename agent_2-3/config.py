@@ -76,8 +76,10 @@ MEDICAL_COL_KEYWORDS = {
     ],
 }
 
-# 遍历目录时跳过的文件夹名
-DEFAULT_SKIP_FOLDERS: Set[str] = {"figure", "分割"}
+# 遍历目录时跳过的文件夹名。
+# Step2-3 的主输入是 Step1 输出目录，影像文件通常位于 figure 目录下；
+# 这里不能跳过 figure，否则 OCR 阶段会拿不到图片。
+DEFAULT_SKIP_FOLDERS: Set[str] = {"分割"}
 
 
 def get_skip_folders() -> Set[str]:

@@ -70,7 +70,20 @@ def _create_memory_agent():
 
 
 async def get_pipeline_context(query_text: str = "", task_spec: Any | None = None) -> tuple[str, list[str]]:
-    return await get_default_memory_service().get_context(query_text=query_text, task_spec=task_spec)
+    _ = task_spec
+    return await get_default_memory_service().get_rule_context(query_text=query_text)
+
+
+async def get_step_memory_context(
+    step_name: str,
+    query_text: str = "",
+    task_spec: Any | None = None,
+) -> tuple[str, list[str]]:
+    return await get_default_memory_service().get_step_context(
+        step_name=step_name,
+        query_text=query_text,
+        task_spec=task_spec,
+    )
 
 
 async def report_pipeline_result(

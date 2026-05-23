@@ -31,10 +31,6 @@ def get_default_workspace_dir() -> str:
     return os.path.join(get_project_root(), "program", "output", "step5_results")
 
 
-def get_default_validation_config_path() -> str:
-    return str(PROJECT_ROOT / "agent_5" / "validation_config.json")
-
-
 def _load_data_quality_repair_module():
     try:
         from agent_5 import data_quality_repair as repair_module
@@ -49,13 +45,17 @@ def _load_data_quality_repair_module():
 async def run_data_quality_repair_standalone(
     input_dir: str | None = None,
     workspace_dir: str | None = None,
-    validation_config_path: str | None = None,
+    workers: int = 4,
+    llm_workers: int = 2,
+    enable_llm: bool = True,
 ) -> dict:
     repair = _load_data_quality_repair_module()
     return await repair.run_data_quality_repair(
         input_dir=input_dir or get_default_input_dir(),
         workspace_dir=workspace_dir or get_default_workspace_dir(),
-        validation_config_path=validation_config_path or get_default_validation_config_path(),
+        workers=workers,
+        llm_workers=llm_workers,
+        enable_llm=enable_llm,
     )
 
 
@@ -73,11 +73,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=get_default_workspace_dir(),
         help=f"输出目录（默认: {get_default_workspace_dir()}）",
     )
-    parser.add_argument(
-        "--validation-config",
-        default=get_default_validation_config_path(),
-        help=f"验证配置路径（默认: {get_default_validation_config_path()}）",
-    )
+    parser.add_argument("--workers", type=int, default=4, help="列画像/规则清洗并行 workers（默认: 4）")
+    parser.add_argument("--llm-workers", type=int, default=2, help="medium/high-risk LLM 脚本并行 workers（默认: 2）")
+    parser.add_argument("--disable-llm", action="store_true", help="禁用 medium/high-risk LLM 脚本生成，仅保留非低风险列原值并报告")
     return parser
 
 
@@ -88,7 +86,9 @@ def main(argv: list[str] | None = None) -> dict:
         repair.run_data_quality_repair(
             input_dir=args.input,
             workspace_dir=args.output,
-            validation_config_path=args.validation_config,
+            workers=args.workers,
+            llm_workers=args.llm_workers,
+            enable_llm=not args.disable_llm,
         )
     )
     print(repair.format_run_summary(result))

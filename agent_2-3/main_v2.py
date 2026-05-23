@@ -4,7 +4,7 @@
 medical_data_cleaner_v2 命令行入口
 
 用法示例：
-  # 单文件处理
+  # 自动选择目录处理或 OCR 回填
   python main_v2.py --input reorganized_output --output results/
 
   # 批量目录处理
@@ -19,8 +19,8 @@ medical_data_cleaner_v2 命令行入口
   # 详细日志
   python main_v2.py --input data/sample.csv --verbose
 
-  # 一体化流水线：OCR + LLM 抽取 + 回填
-  python main_v2.py --pipeline --input 归档/output/step1_results --output results-all/ --ocr-workers 64 --concurrency 100
+  # OCR 回填流水线：OCR + LLM 抽取 + 回填
+  python main_v2.py --mode ocr_fill --input 归档/output/step1_results --output results-all/ --ocr-workers 64 --concurrency 100
 
   # 流水线（使用已有 OCR 缓存，跳过 OCR 步骤）
   python main_v2.py --pipeline --input 归档/output/step1_results --output results-all/ --cache ocr_cache.json --concurrency 100
@@ -34,6 +34,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -47,6 +48,23 @@ for _p in [_HERE, _AS_SRC, _AS_ROOT]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+_PROJECT_ROOT = Path(_HERE).parent
+_STEP23_DIR = _PROJECT_ROOT / "step-2-3"
+_ORCHESTRATOR_DIR = _PROJECT_ROOT / "main_orchestrator"
+_EXECUTION_DIR = _ORCHESTRATOR_DIR / "execution"
+_CORE_DIR = _ORCHESTRATOR_DIR / "core"
+for _p in (_STEP23_DIR, _ORCHESTRATOR_DIR, _EXECUTION_DIR, _CORE_DIR):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+
+
+def get_default_input_path() -> str:
+    return str(_PROJECT_ROOT / "agent_2-3" / "data_input")
+
+
+def get_default_output_dir() -> str:
+    return str(_PROJECT_ROOT / "program" / "output" / "step2_3_results")
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -58,7 +76,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--pipeline",
         action="store_true",
-        help="流水线模式：依次执行 OCR → LLM 抽取 → 回填表格",
+        help="兼容参数，等价于 --mode ocr_fill：依次执行 OCR → LLM 抽取 → 回填表格",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["auto", "directory", "ocr_fill"],
+        default="auto",
+        help="处理模式：auto 根据输入自动选择；directory 用于 MIMIC/结构化目录；ocr_fill 用于图片 OCR 回填",
     )
     parser.add_argument(
         "--cache",
@@ -82,13 +106,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--input", "-i",
         metavar="PATH",
-        help="输入文件或目录路径",
+        default=None,
+        help="输入目录路径；Step2-3 不再支持单文件输入",
     )
     parser.add_argument(
         "--output", "-o",
         metavar="DIR",
-        default="./output_v2",
-        help="输出目录（默认: ./output_v2）",
+        default=get_default_output_dir(),
+        help="输出目录（默认: program/output/step2_3_results）",
     )
     parser.add_argument(
         "--batch",
@@ -185,7 +210,7 @@ def _print_result(result: dict, verbose: bool = False) -> None:
         print(f"  错误: {result['error']}", file=sys.stderr)
 
 
-async def _process_single(
+async def _process_directory(
     input_path: str,
     output_dir: str,
     use_llm: bool,
@@ -193,41 +218,29 @@ async def _process_single(
     model_name: str | None,
     concurrency: int = 8,
     ocr_concurrency: int = 0,
+    mode: str = "auto",
 ) -> dict:
-    """处理单个输入路径，返回结果 dict。"""
-    from agents_v2.react_agent import ReactMedicalAgent
+    """处理单个目录输入路径，返回结果 dict。"""
+    from handoffs import run_step23_handoff
 
-    agent = ReactMedicalAgent(
-        name="MedicalAgent",
-        use_llm=use_llm,
-        verbose=verbose,
-        output_dir=output_dir,
+    if not os.path.isdir(input_path):
+        return {
+            "status": "failed",
+            "success": False,
+            "error": f"Step2-3 现在只接受目录输入: {input_path}",
+        }
+    result = await run_step23_handoff(
+        task_type="step2_3_only",
+        input_path=input_path,
+        output_root=output_dir,
+        mode=mode,
         concurrency=concurrency,
-        ocr_concurrency=ocr_concurrency,
+        use_llm=use_llm,
     )
-
-    from agentscope.message import Msg
-    msg = Msg(
-        name="user",
-        content=input_path,
-        role="user",
-    )
-    response = await agent.reply(msg)
-    content = response.content if hasattr(response, "content") else str(response)
-    metadata = response.metadata if hasattr(response, "metadata") and response.metadata else {}
-
-    # metadata 是完整结果 dict，补充 status 和 message 后返回
-    if metadata:
-        result = dict(metadata)
-        result["status"] = "success" if metadata.get("success") else "failed"
-        result["message"] = content if isinstance(content, str) else str(content)
-        return result
-
-    # 降级：尝试解析 JSON 摘要
-    try:
-        return json.loads(content)
-    except Exception:
-        return {"status": "success", "message": content}
+    payload = result.to_dict()
+    payload["status"] = "success" if payload.get("status") == "SUCCESS" else "failed"
+    payload["success"] = result.status.value == "SUCCESS"
+    return payload
 
 
 async def _interactive_loop(
@@ -258,7 +271,7 @@ async def _interactive_loop(
             continue
 
         print(f"\n正在处理: {raw}")
-        result = await _process_single(raw, output_dir, use_llm, verbose, model_name, concurrency, ocr_concurrency)
+        result = await _process_directory(raw, output_dir, use_llm, verbose, model_name, concurrency, ocr_concurrency)
         _print_result(result, verbose)
         print()
 
@@ -289,7 +302,7 @@ async def _batch_mode(
 
         print(f"[{idx}/{total}] {entry}")
         try:
-            result = await _process_single(path, sub_out, use_llm, verbose, model_name, concurrency, ocr_concurrency)
+            result = await _process_directory(path, sub_out, use_llm, verbose, model_name, concurrency, ocr_concurrency)
             _print_result(result, verbose)
             if result.get("status") == "success":
                 success += 1
@@ -316,21 +329,19 @@ async def _pipeline_mode(
     no_fill: bool,
 ) -> None:
     """流水线模式：通过 ReactMedicalAgent 依次执行 OCR → LLM 抽取 → 回填。"""
-    from agents_v2.react_agent import ReactMedicalAgent
-    from agentscope.message import Msg
+    from handoffs import run_step23_handoff
 
-    agent = ReactMedicalAgent(
-        name="PipelineAgent",
-        use_llm=True,
-        output_dir=output_dir,
-        concurrency=concurrency,
-        pipeline_mode=True,
+    result = await run_step23_handoff(
+        task_type="step2_3_only",
+        input_path=input_dir,
+        output_root=output_dir,
+        mode="ocr_fill",
+        cache_path=cache_path,
         ocr_workers=ocr_workers,
-        ocr_cache=cache_path,
-        no_fill=no_fill,
+        concurrency=concurrency,
+        use_llm=not no_fill,
     )
-    msg = Msg(name="user", content=input_dir, role="user")
-    await agent.reply(msg)
+    _print_result({"status": "success" if result.status.value == "SUCCESS" else "failed", **result.to_dict()}, verbose=True)
 
 
 def main() -> None:
@@ -341,11 +352,14 @@ def main() -> None:
     if args.model:
         os.environ["OPENAI_MODEL_NAME"] = args.model
 
+    if not args.input and not args.interactive:
+        args.input = get_default_input_path()
+
     os.makedirs(args.output, exist_ok=True)
     use_llm = not args.no_llm
     ocr_c = args.ocr_concurrency
 
-    if args.pipeline:
+    if args.pipeline or args.mode == "ocr_fill":
         if not args.input:
             parser.error("流水线模式需要 --input 目录")
         if not os.path.isdir(args.input):
@@ -376,7 +390,7 @@ def main() -> None:
             print(f"错误：路径不存在: {args.input}", file=sys.stderr)
             sys.exit(1)
         result = asyncio.run(
-            _process_single(args.input, args.output, use_llm, args.verbose, args.model, args.concurrency, ocr_c)
+            _process_directory(args.input, args.output, use_llm, args.verbose, args.model, args.concurrency, ocr_c, mode=args.mode)
         )
         _print_result(result, args.verbose)
         sys.exit(0 if result.get("status") == "success" else 1)

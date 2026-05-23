@@ -69,7 +69,9 @@ def build_step1_task_prompt(
     output_root: str,
     generated_script_path: str,
     input_path: str | None = None,
+    memory_context: str | None = None,
 ) -> str:
+    bounded_memory_context = str(memory_context or "").strip()[:6000]
     if task_type == "step1_only":
         tool_sequence = [
             {
@@ -133,6 +135,8 @@ def build_step1_task_prompt(
         "records_path": records_path,
         "output_root": output_root,
         "generated_script_path": generated_script_path,
+        "memory_context": bounded_memory_context,
+        "memory_context_usage": "仅作为历史经验参考；路径、数量和校验结果必须以本轮工具返回为准。",
         "required_tool_sequence": tool_sequence,
         "final_output": "WorkerResult JSON only",
     }

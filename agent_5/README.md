@@ -14,4 +14,12 @@ Current status:
 
 - The standalone Agent5 entrypoint is `agent_5/main.py`.
 - The data cleaning runtime is intentionally separate from Step4 column selection.
-- If `agent_5/data_quality_repair.py` is not present yet, running Agent5 will fail with a clear boundary message instead of importing Step4 code.
+- Step5 uses low / medium / high column risk routing:
+  - low-risk: report only.
+  - medium-risk: LLM-generated column-level cleaning script, with output shape validation.
+  - high-risk: LLM-generated column-level cleaning script, with output shape validation.
+- Standalone example:
+  ```bash
+  python agent_5/main.py --input program/output/step4_results/next_input/filtered.csv
+  ```
+  Use `--disable-llm` to keep medium/high-risk columns unchanged without calling LLM.

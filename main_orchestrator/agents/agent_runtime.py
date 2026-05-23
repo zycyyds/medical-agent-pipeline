@@ -137,4 +137,11 @@ async def collect_tool_results(agent: Any) -> dict[str, list[dict[str, Any]]]:
 
 
 def make_user_msg(name: str, content: str, metadata: dict[str, Any] | None = None) -> Msg:
-    return Msg(name=name, content=content, role="user", metadata=metadata)
+    msg_metadata = dict(metadata or {})
+    if name:
+        msg_metadata.setdefault("sender_name", name)
+    # Some OpenAI-compatible backends, including MiniMax, reject a chat history
+    # when user-role messages carry different `name` values across turns.
+    # Keep the protocol-level name stable and preserve the logical sender in
+    # metadata for debugging.
+    return Msg(name="user", content=content, role="user", metadata=msg_metadata or None)

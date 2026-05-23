@@ -12,31 +12,13 @@ import main_orchestrator as orchestrator_module
 import memory_supervisor as memory_supervisor_module
 
 
-def test_build_orchestrator_uses_model_name_from_env(monkeypatch):
-    captured = {}
-
-    class FakeOpenAIChatModel:
-        def __init__(self, **kwargs):
-            captured["model_kwargs"] = kwargs
-
-    class FakeFormatter:
-        pass
-
+def test_resolve_model_name_uses_model_name_from_env(monkeypatch):
     monkeypatch.setenv("MODEL_NAME", "gpt-5.4")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OPENAI_API_BASE", "http://127.0.0.1:8317/v1")
-    monkeypatch.setattr(orchestrator_module, "OpenAIChatModel", FakeOpenAIChatModel, raising=False)
-    monkeypatch.setattr(orchestrator_module, "OpenAIChatFormatter", FakeFormatter, raising=False)
 
-    agent = orchestrator_module._build_orchestrator("ctx")
-
-    assert captured["model_kwargs"]["model_name"] == "gpt-5.4"
-    assert captured["model_kwargs"]["api_key"] == "test-key"
-    assert captured["model_kwargs"]["client_kwargs"]["base_url"] == "http://127.0.0.1:8317/v1"
-    assert isinstance(agent.formatter, FakeFormatter)
+    assert orchestrator_module.resolve_model_name("main_orchestrator", "gpt-4.1-mini") == "gpt-5.4"
 
 
-def test_build_orchestrator_falls_back_to_agent_config_when_env_missing(monkeypatch):
+def test_resolve_model_name_falls_back_to_agent_config_when_env_missing(monkeypatch):
     monkeypatch.delenv("MODEL_NAME", raising=False)
 
     assert orchestrator_module.resolve_model_name("main_orchestrator", "gpt-4.1-mini") == orchestrator_module.AGENT_CFG["model_name"]

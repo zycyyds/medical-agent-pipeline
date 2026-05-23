@@ -40,14 +40,43 @@ class MemoryService:
         self._print_progress(f"[MemoryAgent] pre-run: 完成，memory_ids={len(used_ids)}, warnings={len(warnings)}")
         return context, used_ids
 
+    async def get_rule_context(self, query_text: str = "") -> tuple[str, list[str]]:
+        self._print_progress("[MemoryAgent] pre-run: 检索 ReMeLight 规则记忆...")
+        rule_text, rule_ids, warnings = await self.rule_memory.search_rules(query_text=query_text)
+        context = self._format_rule_context(rule_text, warnings)
+        self._print_progress(f"[MemoryAgent] pre-run: 规则记忆完成，memory_ids={len(rule_ids)}, warnings={len(warnings)}")
+        return context, rule_ids
+
+    async def get_step_context(
+        self,
+        step_name: str,
+        query_text: str = "",
+        task_spec: Any | None = None,
+    ) -> tuple[str, list[str]]:
+        self._print_progress(f"[MemoryAgent] pre-step: 检索 {step_name} Step 经验记忆...")
+        task_text, tool_text, experience_ids, warnings = await self.experience_memory.retrieve(
+            query_text=query_text,
+            task_spec=task_spec,
+            step_name=step_name,
+        )
+        context = self._format_experience_context(step_name, task_text, tool_text, warnings)
+        self._print_progress(
+            f"[MemoryAgent] pre-step: {step_name} 经验记忆完成，memory_ids={len(experience_ids)}, warnings={len(warnings)}"
+        )
+        return context, experience_ids
+
     async def report_result(
         self,
         trace_payload: dict[str, Any] | str,
         used_memory_ids: list[str] | None = None,
     ) -> str:
         self._print_progress("[MemoryAgent] post-run: 写入 ReMeLight 规则记忆和 Step 经验记忆...")
+        self._print_progress("[MemoryAgent] post-run: Rule Memory start")
         rule_summary, rule_warnings = await self.rule_memory.summarize_trace(trace_payload)
+        self._print_progress(f"[MemoryAgent] post-run: Rule Memory done，warnings={len(rule_warnings)}")
+        self._print_progress("[MemoryAgent] post-run: Task/Tool Memory start")
         experience_summary, experience_warnings = await self.experience_memory.record_from_trace(trace_payload)
+        self._print_progress(f"[MemoryAgent] post-run: Task/Tool Memory done，warnings={len(experience_warnings)}")
         warnings = rule_warnings + experience_warnings
         lines = [
             "### MemoryAgent ReMe 写入总结",
@@ -78,6 +107,35 @@ class MemoryService:
             "",
             "## Rule Memory",
             rule_text.strip() or "No related rule memory found.",
+            "",
+            "## Similar Step Experience",
+            task_text.strip() or "No related Step experience found.",
+            "",
+            "## Tool Memory",
+            tool_text.strip() or "No related tool memory found.",
+        ]
+        if warnings:
+            sections.extend(["", "## Memory Warnings"])
+            sections.extend(f"- {item}" for item in warnings)
+        return "\n".join(sections).strip()
+
+    @staticmethod
+    def _format_rule_context(rule_text: str, warnings: list[str]) -> str:
+        sections = [
+            "# Memory Context",
+            "",
+            "## Rule Memory",
+            rule_text.strip() or "No related rule memory found.",
+        ]
+        if warnings:
+            sections.extend(["", "## Memory Warnings"])
+            sections.extend(f"- {item}" for item in warnings)
+        return "\n".join(sections).strip()
+
+    @staticmethod
+    def _format_experience_context(step_name: str, task_text: str, tool_text: str, warnings: list[str]) -> str:
+        sections = [
+            f"# Step Memory Context: {step_name}",
             "",
             "## Similar Step Experience",
             task_text.strip() or "No related Step experience found.",

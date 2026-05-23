@@ -28,14 +28,15 @@ _OLD_ROOT = os.path.join(os.path.dirname(_HERE), "medical_data_cleaner")
 if _OLD_ROOT not in sys.path:
     sys.path.insert(0, _OLD_ROOT)
 
-from config import get_api_config
+from config import get_api_config, get_embedding_config
 
 
 # ---------------------------------------------------------------------------
 # 内部 LLM 调用
 # ---------------------------------------------------------------------------
 
-_llm_client: Optional[Any] = None  # 复用单个 AsyncOpenAI client
+_llm_client: Optional[Any] = None  # 复用单个 AsyncOpenAI chat client
+_embedding_client: Optional[Any] = None  # 独立 embedding client
 
 
 def _get_llm_client() -> Any:
@@ -45,6 +46,15 @@ def _get_llm_client() -> Any:
         cfg = get_api_config()
         _llm_client = openai.AsyncOpenAI(api_key=cfg["api_key"], base_url=cfg["api_base"])
     return _llm_client
+
+
+def _get_embedding_client() -> Any:
+    global _embedding_client
+    if _embedding_client is None:
+        import openai
+        cfg = get_embedding_config()
+        _embedding_client = openai.AsyncOpenAI(api_key=cfg["api_key"], base_url=cfg["api_base"])
+    return _embedding_client
 
 
 async def _call_llm(prompt: str, model_name: Optional[str] = None) -> Optional[str]:
@@ -284,18 +294,20 @@ def extract_from_text_sync(text: str, max_chars: int = 4000) -> Dict[str, Any]:
 # 实体名称语义聚类（Embedding + 层次聚类）
 # ---------------------------------------------------------------------------
 
-_EMBED_MODEL = "text-embedding-3-small"
 _CLUSTER_THRESHOLD = 0.25  # 距离阈值，对应余弦相似度 > 0.75
 
 
 async def _get_embeddings(texts: List[str]) -> Optional[List[List[float]]]:
     """批量获取文本 embedding，返回向量列表。"""
     try:
-        cfg = get_api_config()
-        if not cfg["api_key"]:
+        cfg = get_embedding_config()
+        if not cfg["api_key"] or not cfg["api_base"]:
             return None
-        client = _get_llm_client()
-        resp = await client.embeddings.create(model=_EMBED_MODEL, input=texts)
+        client = _get_embedding_client()
+        kwargs = {"model": cfg["model_name"], "input": texts}
+        if cfg.get("dimensions"):
+            kwargs["dimensions"] = cfg["dimensions"]
+        resp = await client.embeddings.create(**kwargs)
         return [d.embedding for d in resp.data]
     except Exception:
         return None

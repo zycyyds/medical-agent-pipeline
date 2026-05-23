@@ -8,10 +8,16 @@ from typing import Any
 class TaskType(str, Enum):
     FULL_PIPELINE = "full_pipeline"
     STEP1_ONLY = "step1_only"
+    STEP2_3_ONLY = "step2_3_only"
+    STEP4_ONLY = "step4_only"
+    STEP5_ONLY = "step5_only"
+    STEP6_ONLY = "step6_only"
+    STEP7_ONLY = "step7_only"
     RESUME_FROM_RECORDS = "resume_from_records"
     RESUME_FROM_STEP2_3 = "resume_from_step2_3"
     RESUME_FROM_STEP4 = "resume_from_step4"
     RESUME_FROM_STEP5 = "resume_from_step5"
+    RESUME_FROM_STEP6 = "resume_from_step6"
     REPAIR_TASK = "repair_task"
     MEMORY_ONLY = "memory_only"
 
@@ -46,6 +52,9 @@ class TaskSpec:
     resume_from_step: str = ""
     intent_summary: str = ""
     confidence: float = 1.0
+    execution_scope: str = ""
+    start_step: str = ""
+    allowed_steps: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -54,6 +63,9 @@ class TaskSpec:
             "resume_from_step": self.resume_from_step,
             "intent_summary": self.intent_summary,
             "confidence": self.confidence,
+            "execution_scope": self.execution_scope,
+            "start_step": self.start_step,
+            "allowed_steps": list(self.allowed_steps),
         }
 
 

@@ -36,6 +36,24 @@ TASK_ROUTER_PROMPT = """你是 TaskRouterAgent，只负责把用户输入分流�
 """
 
 
+def _print_route_decision(spec: TaskSpec, source: str) -> None:
+    print("\n" + "=" * 72)
+    print(f"[TaskRouter] DECISION source={source}")
+    print(f"[TaskRouter]   task_type: {spec.task_type.value}")
+    print(f"[TaskRouter]   execution_scope: {spec.execution_scope or '(unset)'}")
+    print(f"[TaskRouter]   start_step: {spec.start_step or '(unset)'}")
+    print(f"[TaskRouter]   allowed_steps: {spec.allowed_steps or []}")
+    if spec.resume_from_step:
+        print(f"[TaskRouter]   resume_from_step: {spec.resume_from_step}")
+    if spec.intent_summary:
+        print(f"[TaskRouter]   reason: {spec.intent_summary}")
+    for key in ("input_path", "records_path", "input_csv", "filtered_csv", "selection_report", "passed_patients_json", "task_text"):
+        value = spec.entry_artifacts.get(key)
+        if value not in (None, "", [], {}):
+            print(f"[TaskRouter]   artifact.{key}: {value}")
+    print("=" * 72)
+
+
 def route_task_tool(user_input: str, project_root: str | None = None) -> ToolResponse:
     """Route a natural language request or artifact path to a TaskSpec JSON."""
     spec = route_task(user_input=user_input, project_root=project_root)
@@ -49,6 +67,9 @@ def task_spec_from_dict(payload: dict[str, Any]) -> TaskSpec:
         resume_from_step=str(payload.get("resume_from_step") or ""),
         intent_summary=str(payload.get("intent_summary") or ""),
         confidence=float(payload.get("confidence", 1.0) or 0.0),
+        execution_scope=str(payload.get("execution_scope") or ""),
+        start_step=str(payload.get("start_step") or ""),
+        allowed_steps=[str(item) for item in payload.get("allowed_steps") or []],
     )
 
 
@@ -63,6 +84,12 @@ def _complete_with_deterministic_route(spec: TaskSpec, user_input: str, project_
                 spec.entry_artifacts[key] = value
     if not spec.resume_from_step and deterministic.resume_from_step:
         spec.resume_from_step = deterministic.resume_from_step
+    if not spec.execution_scope and deterministic.execution_scope:
+        spec.execution_scope = deterministic.execution_scope
+    if not spec.start_step and deterministic.start_step:
+        spec.start_step = deterministic.start_step
+    if not spec.allowed_steps and deterministic.allowed_steps:
+        spec.allowed_steps = list(deterministic.allowed_steps)
     return spec
 
 
@@ -79,9 +106,9 @@ def create_task_router_agent() -> ReActAgent:
         memory=InMemoryMemory(),
         parallel_tool_calls=False,
         max_iters=4,
-        print_hint_msg=True,
+        print_hint_msg=False,
     )
-    agent._disable_console_output = False
+    agent._disable_console_output = True
     return agent
 
 
@@ -91,6 +118,7 @@ async def route_task_with_agent(user_input: str, project_root: str | Path) -> Ta
         spec = route_task(user_input, project_root=project_root)
         spec.intent_summary = f"{spec.intent_summary}（TaskRouterAgent 未配置模型密钥，使用确定性 route_task 兜底）"
         spec.confidence = min(spec.confidence, 0.9)
+        _print_route_decision(spec, source="deterministic_fallback_no_credentials")
         return spec
 
     agent = create_task_router_agent()
@@ -105,17 +133,23 @@ async def route_task_with_agent(user_input: str, project_root: str | Path) -> Ta
         tool_results = await collect_tool_results(agent)
         routed = (tool_results.get("route_task_tool") or [None])[-1]
         if routed:
-            return _complete_with_deterministic_route(task_spec_from_dict(routed), user_input, project_root)
+            spec = _complete_with_deterministic_route(task_spec_from_dict(routed), user_input, project_root)
+            _print_route_decision(spec, source="llm_tool_route_task_tool")
+            return spec
         parsed = parse_agent_text_json(res.get_text_content() or "")
         if parsed:
-            return _complete_with_deterministic_route(task_spec_from_dict(parsed), user_input, project_root)
+            spec = _complete_with_deterministic_route(task_spec_from_dict(parsed), user_input, project_root)
+            _print_route_decision(spec, source="llm_final_json")
+            return spec
     except Exception as exc:
         spec = route_task(user_input, project_root=project_root)
         spec.intent_summary = f"{spec.intent_summary}（TaskRouterAgent 调用失败，使用确定性 route_task 兜底: {exc}）"
         spec.confidence = min(spec.confidence, 0.7)
+        _print_route_decision(spec, source="deterministic_fallback_exception")
         return spec
 
     spec = route_task(user_input, project_root=project_root)
     spec.intent_summary = f"{spec.intent_summary}（TaskRouterAgent 未返回可解析 TaskSpec，使用确定性 route_task 兜底）"
     spec.confidence = min(spec.confidence, 0.7)
+    _print_route_decision(spec, source="deterministic_fallback_unparsed")
     return spec

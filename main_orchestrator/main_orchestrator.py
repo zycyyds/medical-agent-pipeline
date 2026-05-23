@@ -6,7 +6,6 @@ import json
 import os
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATOR_DIR = PROJECT_ROOT / "main_orchestrator"
@@ -18,13 +17,6 @@ for path in (PROJECT_ROOT, ORCHESTRATOR_DIR, AGENTS_DIR, CORE_DIR, EXECUTION_DIR
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-try:
-    from agentscope.formatter import OpenAIChatFormatter
-    from agentscope.model import OpenAIChatModel
-except Exception:  # pragma: no cover - compatibility for minimal test envs
-    OpenAIChatFormatter = None
-    OpenAIChatModel = None
-
 from configs.loader import get_agent_config
 from contracts import PipelineRunResult, TaskType
 from orchestrator_agent import run_with_orchestrator_agent
@@ -32,15 +24,24 @@ from router import route_task
 from router_agent import route_task_with_agent
 
 try:
-    from memory_supervisor import get_pipeline_context, report_pipeline_result
+    from memory_supervisor import report_pipeline_result
 except Exception:  # pragma: no cover
-    get_pipeline_context = None
     report_pipeline_result = None
 
 
 AGENT_CFG = get_agent_config("main_orchestrator")
 EXIT_COMMANDS = {"exit", "quit", "q", "退出", "结束"}
 HELP_COMMANDS = {"help", "?", "帮助"}
+TASK_TEXT_REQUIRED_TYPES = {
+    TaskType.FULL_PIPELINE,
+    TaskType.STEP4_ONLY,
+    TaskType.STEP7_ONLY,
+    TaskType.RESUME_FROM_STEP2_3,
+    TaskType.RESUME_FROM_STEP4,
+    TaskType.RESUME_FROM_STEP5,
+    TaskType.RESUME_FROM_STEP6,
+}
+STEP_ORDER = ["step1", "step2_3", "step4", "step5", "step6", "step7"]
 
 
 def resolve_model_name(agent_key: str, default: str) -> str:
@@ -49,25 +50,6 @@ def resolve_model_name(agent_key: str, default: str) -> str:
         return env_model
     cfg = get_agent_config(agent_key)
     return str(cfg.get("model_name") or cfg.get("model") or default)
-
-
-def _build_orchestrator(context_str: str, enable_memory_agent: bool = True):
-    """Compatibility shim for old tests; new runtime uses StateMachineOrchestrator."""
-    _ = context_str, enable_memory_agent
-    formatter = OpenAIChatFormatter() if OpenAIChatFormatter else None
-    model = None
-    if OpenAIChatModel:
-        model = OpenAIChatModel(
-            model_name=resolve_model_name("main_orchestrator", "gpt-4.1-mini"),
-            api_key=os.environ.get("OPENAI_API_KEY", AGENT_CFG.get("api_key", "")),
-            client_kwargs={
-                "base_url": os.environ.get(
-                    "OPENAI_API_BASE",
-                    AGENT_CFG.get("base_url") or AGENT_CFG.get("api_base") or "https://api.openai.com/v1",
-                )
-            },
-        )
-    return SimpleNamespace(name="StateMachineOrchestrator", model=model, formatter=formatter)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -82,7 +64,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--disable-memory-agent",
         action="store_true",
-        help="Disable ReMe memory context injection and post-run memory recording.",
+        help="Disable Orchestrator-controlled ReMe memory tools and post-run memory recording.",
     )
     parser.add_argument(
         "--json",
@@ -102,27 +84,22 @@ async def run_pipeline(
     else:
         task_spec = await route_task_with_agent(user_input, project_root=PROJECT_ROOT)
     if task_type:
-        task_spec.task_type = TaskType(task_type)
+        _apply_task_type_override(task_spec, TaskType(task_type))
         task_spec.intent_summary = f"用户显式指定 task_type={task_type}"
-
-    context_str = ""
-    used_memory_ids: list[str] = []
-    if enable_memory_agent and get_pipeline_context is not None:
-        try:
-            context_str, used_memory_ids = await get_pipeline_context(
-                query_text=task_spec.intent_summary or user_input,
-                task_spec=task_spec,
-            )
-        except Exception as exc:
-            context_str = f"MemoryAgent 读取失败，主流程继续执行: {exc}"
 
     result = await run_with_orchestrator_agent(
         task_spec=task_spec,
-        context=context_str,
+        context="",
         enable_memory_agent=enable_memory_agent,
     )
 
-    if enable_memory_agent and report_pipeline_result is not None and task_spec.task_type != TaskType.MEMORY_ONLY:
+    used_memory_ids = _memory_ids_from_result(result)
+    if (
+        enable_memory_agent
+        and report_pipeline_result is not None
+        and task_spec.task_type != TaskType.MEMORY_ONLY
+        and not _memory_recorded_by_orchestrator(result)
+    ):
         try:
             await report_pipeline_result(
                 {
@@ -151,6 +128,81 @@ async def run_pipeline(
                 }
             )
     return result
+
+
+def _memory_ids_from_result(result: PipelineRunResult) -> list[str]:
+    ids: list[str] = []
+    for item in result.worker_results:
+        payload = item.get("result") if isinstance(item, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
+        for memory_id in artifacts.get("used_memory_ids") or []:
+            if memory_id not in ids:
+                ids.append(memory_id)
+    return ids
+
+
+def _memory_recorded_by_orchestrator(result: PipelineRunResult) -> bool:
+    for item in result.worker_results:
+        payload = item.get("result") if isinstance(item, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
+        if artifacts.get("memory_recorded") is True:
+            return True
+    return False
+
+
+def _memory_step_name_for_task(task_type: TaskType) -> str:
+    if task_type in {TaskType.STEP1_ONLY, TaskType.RESUME_FROM_RECORDS}:
+        return "step1"
+    if task_type == TaskType.STEP2_3_ONLY:
+        return "step2_3"
+    if task_type in {TaskType.STEP4_ONLY, TaskType.RESUME_FROM_STEP2_3}:
+        return "step4"
+    if task_type in {TaskType.STEP5_ONLY, TaskType.RESUME_FROM_STEP4}:
+        return "step5"
+    if task_type in {TaskType.STEP6_ONLY, TaskType.RESUME_FROM_STEP5}:
+        return "step6"
+    if task_type in {TaskType.STEP7_ONLY, TaskType.RESUME_FROM_STEP6}:
+        return "step7"
+    return task_type.value
+
+
+def _steps_from(start_step: str) -> list[str]:
+    if start_step not in STEP_ORDER:
+        return []
+    return STEP_ORDER[STEP_ORDER.index(start_step):]
+
+
+def _apply_task_type_override(spec, task_type: TaskType):
+    spec.task_type = task_type
+    if task_type == TaskType.FULL_PIPELINE:
+        spec.execution_scope, spec.start_step, spec.allowed_steps = "full_pipeline", "step1", list(STEP_ORDER)
+    elif task_type == TaskType.STEP1_ONLY:
+        spec.execution_scope, spec.start_step, spec.allowed_steps = "only", "step1", ["step1"]
+    elif task_type == TaskType.STEP2_3_ONLY:
+        spec.execution_scope, spec.start_step, spec.allowed_steps = "only", "step2_3", ["step2_3"]
+    elif task_type == TaskType.STEP4_ONLY:
+        spec.execution_scope, spec.start_step, spec.allowed_steps = "only", "step4", ["step4"]
+    elif task_type == TaskType.STEP5_ONLY:
+        spec.execution_scope, spec.start_step, spec.allowed_steps = "only", "step5", ["step5"]
+    elif task_type == TaskType.STEP6_ONLY:
+        spec.execution_scope, spec.start_step, spec.allowed_steps = "only", "step6", ["step6"]
+    elif task_type == TaskType.STEP7_ONLY:
+        spec.execution_scope, spec.start_step, spec.allowed_steps = "only", "step7", ["step7"]
+    elif task_type == TaskType.RESUME_FROM_STEP2_3:
+        spec.execution_scope, spec.start_step, spec.allowed_steps = "from_step_to_end", "step4", _steps_from("step4")
+    elif task_type == TaskType.RESUME_FROM_STEP4:
+        spec.execution_scope, spec.start_step, spec.allowed_steps = "from_step_to_end", "step5", _steps_from("step5")
+    elif task_type == TaskType.RESUME_FROM_STEP5:
+        spec.execution_scope, spec.start_step, spec.allowed_steps = "from_step_to_end", "step6", _steps_from("step6")
+    elif task_type == TaskType.RESUME_FROM_STEP6:
+        spec.execution_scope, spec.start_step, spec.allowed_steps = "from_step_to_end", "step7", ["step7"]
+    elif task_type == TaskType.RESUME_FROM_RECORDS:
+        spec.execution_scope, spec.start_step, spec.allowed_steps = "only", "step1", ["step1"]
+    return spec
 
 
 async def main_async(args: argparse.Namespace) -> PipelineRunResult:
@@ -210,6 +262,24 @@ def _resolve_interactive_input(user_input: str, last_result: PipelineRunResult |
     return text
 
 
+def _preview_task_spec_for_task_text(user_input: str, task_type: str = ""):
+    spec = route_task(user_input, project_root=PROJECT_ROOT)
+    if task_type:
+        _apply_task_type_override(spec, TaskType(task_type))
+    return spec
+
+
+def _needs_interactive_task_text(user_input: str, task_type: str = "") -> bool:
+    spec = _preview_task_spec_for_task_text(user_input, task_type=task_type)
+    if spec.task_type not in TASK_TEXT_REQUIRED_TYPES and not {"step4", "step7"}.intersection(set(spec.allowed_steps)):
+        return False
+    return not str(spec.entry_artifacts.get("task_text") or "").strip()
+
+
+def _append_interactive_task_text(user_input: str, task_text: str) -> str:
+    return f"{user_input.strip()}\n本次任务裁剪的目标是{task_text.strip()}"
+
+
 async def interactive_loop(args: argparse.Namespace) -> None:
     if args.json:
         os.environ["STEP1_PROGRESS_ENABLED"] = "false"
@@ -237,6 +307,16 @@ async def interactive_loop(args: argparse.Namespace) -> None:
             continue
 
         effective_input = _resolve_interactive_input(user_input, last_result)
+        if _needs_interactive_task_text(effective_input, task_type=args.task_type):
+            try:
+                task_text = input("[MultiAgent] 请输入本次任务裁剪的目标: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n[MultiAgent] 已退出。")
+                return
+            if not task_text:
+                print("[MultiAgent] 缺少任务裁剪目标，本次任务未启动。")
+                continue
+            effective_input = _append_interactive_task_text(effective_input, task_text)
         result = await run_pipeline(
             user_input=effective_input,
             task_type=args.task_type,
