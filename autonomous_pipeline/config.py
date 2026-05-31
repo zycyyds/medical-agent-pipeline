@@ -22,6 +22,11 @@ STEP_AGENT_KEYS = {
     "planner": "planner",
     "evaluator": "evaluator",
 }
+FALLBACK_AGENT_KEYS = {
+    "task_analysis": "main_orchestrator",
+    "planner": "main_orchestrator",
+    "evaluator": "main_orchestrator",
+}
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -74,7 +79,10 @@ def get_agent_config(step_or_agent_key: str) -> AgentConfig:
     agents = cfg.get("agents", {}) or {}
     global_cfg = cfg.get("global", {}) or {}
     agent_key = STEP_AGENT_KEYS.get(step_or_agent_key, step_or_agent_key)
-    raw = {**global_cfg, **(agents.get(agent_key, {}) or {})}
+    agent_cfg = agents.get(agent_key, {}) or {}
+    if not agent_cfg and step_or_agent_key in FALLBACK_AGENT_KEYS:
+        agent_cfg = agents.get(FALLBACK_AGENT_KEYS[step_or_agent_key], {}) or {}
+    raw = {**global_cfg, **agent_cfg}
     return AgentConfig(
         api_key=str(os.environ.get("OPENAI_API_KEY") or raw.get("api_key") or ""),
         base_url=str(os.environ.get("OPENAI_API_BASE") or raw.get("base_url") or raw.get("api_base") or "https://api.openai.com/v1"),

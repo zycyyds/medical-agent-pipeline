@@ -97,6 +97,34 @@ def test_tool_wrapper_prints_agent_decision_reason(capsys):
     assert "[Agent 编排] 调用工具 sample_tool" in err
 
 
+def test_planner_agents_fallback_to_main_orchestrator_config(tmp_path, monkeypatch):
+    import yaml
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "agents": {
+                    "main_orchestrator": {
+                        "api_key": "test-key",
+                        "base_url": "https://example.test/v1",
+                        "model": "test-model",
+                    }
+                }
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    from autonomous_pipeline import config
+
+    monkeypatch.setattr(config, "PROJECT_ROOT", tmp_path)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    cfg = config.get_agent_config("planner")
+    assert cfg.api_key == "test-key"
+    assert cfg.model == "test-model"
+
+
 def test_step1_public_tools_accept_reason_argument():
     from autonomous_pipeline.steps.step1.tools import TOOL_FUNCTIONS
 
