@@ -120,7 +120,24 @@ def run_step4_data_cleaning(input_csv_path: str, column_risk_report_path: str, o
         return _trace(output_root, "run_step4_data_cleaning", locals(), repair("Step4 数据清洗失败。", [str(exc)], {"input_csv_path": input_csv_path}), started)
 
 
-def normalize_step4_outputs(cleaned_csv_path: str, data_quality_report_path: str, column_risk_report_path: str, output_root: str, selection_report_path: str | None = None, reason: str = "") -> dict:
+def build_step4_patient_cases(cleaned_csv_path: str, output_root: str, task_text: str = "", reason: str = "") -> dict:
+    """从清洗后的宽表生成患者级病例 JSONL，供 Planner Evaluator 与人工 JSONL 做内容语义评估。
+
+    Args:
+        cleaned_csv_path: run_step4_data_cleaning 生成的 cleaned CSV。
+        output_root: 新工作区输出根目录。
+        task_text: 用户任务目标，例如 肝病诊断。
+        reason: Agent 选择当前工具的中文理由，会打印到终端日志。
+    """
+    started = time.time()
+    try:
+        artifacts = logic.build_patient_cases(cleaned_csv_path, output_root=_step_output_root(output_root), task_text=task_text)
+        return _trace(output_root, "build_step4_patient_cases", locals(), ok("Step4 患者级病例 JSONL 已生成。", artifacts), started)
+    except Exception as exc:
+        return _trace(output_root, "build_step4_patient_cases", locals(), repair("Step4 患者级病例 JSONL 生成失败。", [str(exc)], {"cleaned_csv_path": cleaned_csv_path}), started)
+
+
+def normalize_step4_outputs(cleaned_csv_path: str, data_quality_report_path: str, column_risk_report_path: str, output_root: str, selection_report_path: str | None = None, task_text: str = "", reason: str = "") -> dict:
     """标准化 Step4 产物到 next_input，供 Step5 一致性验证继续使用。
 
     Args:
@@ -129,6 +146,7 @@ def normalize_step4_outputs(cleaned_csv_path: str, data_quality_report_path: str
         column_risk_report_path: classify_step4_column_risks 生成的风险报告。
         output_root: 新工作区输出根目录。
         selection_report_path: 可选 Step3 selection_report，会复制到 next_input。
+        task_text: 用户任务目标；用于写入 patient_cases.jsonl。
         reason: Agent 选择当前工具的中文理由，会打印到终端日志。
     """
     started = time.time()
@@ -139,6 +157,7 @@ def normalize_step4_outputs(cleaned_csv_path: str, data_quality_report_path: str
             column_risk_report_path,
             output_root=_step_output_root(output_root),
             selection_report_path=selection_report_path,
+            task_text=task_text,
         )
         return _trace(output_root, "normalize_step4_outputs", locals(), ok("Step4 next_input 已生成。", artifacts), started)
     except Exception as exc:
@@ -178,6 +197,7 @@ TOOL_FUNCTIONS = [
     profile_step4_table,
     classify_step4_column_risks,
     run_step4_data_cleaning,
+    build_step4_patient_cases,
     normalize_step4_outputs,
     validate_step4_output,
 ]

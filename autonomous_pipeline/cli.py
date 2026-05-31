@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib
+import json
 import re
 import sys
 from pathlib import Path
@@ -97,10 +98,13 @@ def main() -> None:
     run_step.add_argument("--dry-run", action="store_true", help="Print the prompt without calling the model")
     run_step.add_argument("--retries", type=int, default=2, help="Retry transient model connection errors before failing")
 
-    run_all = sub.add_parser("run-all", help="Run Step1-Step6 in stage order; each step internally chooses tools")
+    run_all = sub.add_parser("run-all", help="Run PlannerAgent loop over autonomous Step1-Step6 agents")
     run_all.add_argument("--input", required=True)
-    run_all.add_argument("--task", default="")
+    run_all.add_argument("--task", required=True)
+    run_all.add_argument("--gold-dir", required=True, help="Gold-standard directory with visible/*.jsonl and optional hidden/*.jsonl")
     run_all.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
+    run_all.add_argument("--max-rounds", type=int, default=3)
+    run_all.add_argument("--run-id", default="")
     run_all.add_argument("--dry-run", action="store_true")
 
     args = parser.parse_args()
@@ -121,16 +125,34 @@ def main() -> None:
         print_response(response)
         return
 
-    current_input = args.input
-    for step in STEPS:
-        if args.dry_run:
-            print(f"\n===== {step} =====")
-            print(_prompt_for(step, current_input, output_root, args.task))
-            continue
-        response = asyncio.run(_run_step(step, current_input, output_root, args.task))
-        print_response(response)
-        # First version keeps stage order but does not infer every next artifact from agent text.
-        # Operators can run individual steps with explicit inputs for controlled experiments.
+    if args.dry_run:
+        from autonomous_pipeline.planner.prompt import build_task_prompt as build_planner_prompt
+        from autonomous_pipeline.task_analysis.prompt import build_task_prompt as build_analysis_prompt
+
+        run_root = Path(output_root) / "planner_runs" / (args.run_id or "dry_run")
+        task_spec_path = run_root / "task_spec.json"
+        round_root = run_root / "rounds" / "round_01"
+        print("===== task_analysis =====")
+        print(build_analysis_prompt(args.input, str(run_root), args.task, args.gold_dir))
+        print("\n===== planner round 01 =====")
+        print(build_planner_prompt(args.input, str(round_root), args.task, str(task_spec_path)))
+        return
+
+    try:
+        from autonomous_pipeline.planner.loop import run_planner_loop_sync
+
+        result = run_planner_loop_sync(
+            input_path=args.input,
+            task_text=args.task,
+            gold_dir=args.gold_dir,
+            output_root=output_root,
+            max_rounds=args.max_rounds,
+            run_id=args.run_id or None,
+        )
+    except Exception as exc:
+        print(f"[run-all failed] {type(exc).__name__}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

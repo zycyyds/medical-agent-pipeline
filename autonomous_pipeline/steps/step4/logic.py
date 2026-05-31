@@ -365,6 +365,7 @@ def normalize_step4_outputs(
     column_risk_report_path: str | Path,
     output_root: str | Path | None = None,
     selection_report_path: str | Path | None = None,
+    task_text: str = "",
 ) -> dict[str, Any]:
     cleaned_csv = resolve_path(cleaned_csv_path)
     data_quality_report = resolve_path(data_quality_report_path)
@@ -375,12 +376,15 @@ def normalize_step4_outputs(
     next_csv = next_input / "filtered.csv"
     next_quality = next_input / "data_quality_report.json"
     next_risk = next_input / "column_risk_report.json"
+    next_cases = next_input / "patient_cases.jsonl"
     for path in (cleaned_csv, data_quality_report, risk_report):
         if not path.is_file():
             raise FileNotFoundError(f"Step4 标准化缺少文件: {path}")
     shutil.copy2(cleaned_csv, next_csv)
     shutil.copy2(data_quality_report, next_quality)
     shutil.copy2(risk_report, next_risk)
+    case_artifacts = build_patient_cases(cleaned_csv, output_root=output, task_text=task_text)
+    shutil.copy2(case_artifacts["patient_cases_jsonl"], next_cases)
 
     next_selection = ""
     if selection_report_path:
@@ -395,11 +399,132 @@ def normalize_step4_outputs(
         "next_input_csv": str(next_csv),
         "next_data_quality_report": str(next_quality),
         "next_column_risk_report": str(next_risk),
+        "next_patient_cases_jsonl": str(next_cases),
         "next_selection_report": next_selection,
         "cleaned_csv_path": str(cleaned_csv),
+        "patient_cases_jsonl": case_artifacts["patient_cases_jsonl"],
+        "patient_case_count": case_artifacts["patient_case_count"],
         "data_quality_report_path": str(data_quality_report),
         "column_risk_report_path": str(risk_report),
     }
+
+
+def build_patient_cases(cleaned_csv_path: str | Path, output_root: str | Path | None = None, task_text: str = "") -> dict[str, Any]:
+    cleaned_csv = resolve_path(cleaned_csv_path)
+    output = resolve_path(output_root or cleaned_csv.parent)
+    df = _read_table(cleaned_csv)
+    if df.empty:
+        cases: list[dict[str, Any]] = []
+    else:
+        patient_col = _detect_case_patient_column(df)
+        group_cols = [patient_col]
+        for candidate in ("hadm_id", "stay_id"):
+            if candidate in df.columns:
+                group_cols.append(candidate)
+                break
+        cases = []
+        grouped = df.groupby(group_cols, dropna=False, sort=False) if group_cols else [(("dataset",), df)]
+        for group_key, group_df in grouped:
+            if not isinstance(group_key, tuple):
+                group_key = (group_key,)
+            patient_id = _clean_case_value(group_key[0])
+            case_id = "_".join(_clean_case_value(item) for item in group_key if _clean_case_value(item)) or f"case_{len(cases) + 1:04d}"
+            sections = _build_case_sections(group_df)
+            cases.append(
+                {
+                    "case_id": case_id,
+                    "patient_id": patient_id,
+                    "task": task_text,
+                    "source": {
+                        "cleaned_csv": str(cleaned_csv),
+                        "row_count": int(len(group_df)),
+                        "group_columns": group_cols,
+                    },
+                    "sections": sections,
+                }
+            )
+    timestamp = _timestamp()
+    cases_path = output / f"patient_cases_{timestamp}.jsonl"
+    _write_jsonl(cases_path, cases)
+    summary_path = output / f"patient_cases_summary_{timestamp}.json"
+    _write_json(
+        summary_path,
+        {
+            "cleaned_csv_path": str(cleaned_csv),
+            "patient_cases_jsonl": str(cases_path),
+            "patient_case_count": len(cases),
+            "task_text": task_text,
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+        },
+    )
+    return {
+        "cleaned_csv_path": str(cleaned_csv),
+        "patient_cases_jsonl": str(cases_path),
+        "patient_cases_summary": str(summary_path),
+        "patient_case_count": len(cases),
+    }
+
+
+def _detect_case_patient_column(df: pd.DataFrame) -> str:
+    lower = {str(col).lower(): str(col) for col in df.columns}
+    for candidate in ("patient_id", "subject_id", "hadm_id", "stay_id", "record_index", "id"):
+        if candidate in lower:
+            return lower[candidate]
+    for col in df.columns:
+        if "patient" in str(col).lower() or "subject" in str(col).lower() or "患者" in str(col):
+            return str(col)
+    return str(df.columns[0])
+
+
+def _clean_case_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and value != value:
+        return ""
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    if text.lower() in NULL_LIKE_TOKENS:
+        return ""
+    if re.fullmatch(r"\d+\.0", text):
+        return text[:-2]
+    return text
+
+
+def _case_entries(group_df: pd.DataFrame, include_keywords: tuple[str, ...], max_items: int = 30) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for col in group_df.columns:
+        low = str(col).lower()
+        if not any(keyword in low or keyword in str(col) for keyword in include_keywords):
+            continue
+        for value in group_df[col].tolist():
+            text = _clean_case_value(value)
+            if not text:
+                continue
+            key = (str(col), text)
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append({"field": str(col), "value": text[:500]})
+            if len(entries) >= max_items:
+                return entries
+    return entries
+
+
+def _build_case_sections(group_df: pd.DataFrame) -> dict[str, Any]:
+    sections = {
+        "病历": _case_entries(group_df, ("subject_id", "patient_id", "hadm_id", "gender", "age", "admittime", "dischtime", "race"), max_items=20),
+        "诊断列表": _case_entries(group_df, ("diagnosis", "diagnoses", "diagnos", "disease", "condition", "icd", "诊断", "疾病"), max_items=40),
+        "手术与操作": _case_entries(group_df, ("procedure", "operation", "surgery", "操作", "手术"), max_items=30),
+        "住院用药": _case_entries(group_df, ("medication", "drug", "prescription", "pharmacy", "用药", "药"), max_items=30),
+        "就诊文本": _case_entries(group_df, ("text", "note", "report", "impression", "indication", "history", "文本", "报告", "病史"), max_items=20),
+        "实验室检验": _case_entries(group_df, ("lab", "labevent", "value", "unit", "itemid", "检验", "实验室"), max_items=50),
+        "生命体征": _case_entries(group_df, ("heart", "resp", "bp", "blood_pressure", "temperature", "spo2", "vital", "生命体征", "血压", "体温"), max_items=30),
+        "体格测量": _case_entries(group_df, ("height", "weight", "bmi", "体重", "身高", "体格"), max_items=20),
+    }
+    compact = {key: value for key, value in sections.items() if value}
+    if not compact:
+        compact["原始字段"] = _case_entries(group_df, tuple(str(col) for col in group_df.columns[:20]), max_items=40)
+    return compact
 
 
 def validate_step4_output(

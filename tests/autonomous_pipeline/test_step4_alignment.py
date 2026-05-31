@@ -116,6 +116,8 @@ def test_step4_old_step5_style_cleaning_pipeline_without_llm(tmp_path):
     assert normalized["status"] == "SUCCESS"
     assert Path(normalized["artifacts"]["next_input_csv"]).is_file()
     assert Path(normalized["artifacts"]["next_selection_report"]).is_file()
+    assert Path(normalized["artifacts"]["next_patient_cases_jsonl"]).is_file()
+    assert normalized["artifacts"]["patient_case_count"] == 2
 
     validated = tools.validate_step4_output(
         resolved["artifacts"]["input_csv_path"],
@@ -151,3 +153,16 @@ def test_step4_llm_cleaner_updates_only_target_column(tmp_path, monkeypatch):
     assert cleaned["subject_id"].tolist() == ["10000032", "10000764"]
     assert cleaned["discharge_Diagnosis_hcv_cirrhosis_status"].tolist() == ["bar confirmed", "keep"]
     assert "discharge_Diagnosis_hcv_cirrhosis_status" in result["high_risk_generated_cleaners"]
+
+
+def test_step4_patient_cases_are_content_oriented(tmp_path):
+    from autonomous_pipeline.steps.step4 import logic
+
+    input_csv = _write_step3_filtered(tmp_path / "input.csv")
+    artifacts = logic.build_patient_cases(input_csv, output_root=tmp_path / "out", task_text="肝病诊断")
+    path = Path(artifacts["patient_cases_jsonl"])
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert artifacts["patient_case_count"] == 2
+    assert rows[0]["patient_id"] == "10000032"
+    assert "诊断列表" in rows[0]["sections"]
+    assert "实验室检验" in rows[0]["sections"]

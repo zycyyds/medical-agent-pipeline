@@ -18,6 +18,9 @@ STEP_AGENT_KEYS = {
     "step4": "agent_5",
     "step5": "agent_6_7",
     "step6": "agent_6_7",
+    "task_analysis": "task_analysis",
+    "planner": "planner",
+    "evaluator": "evaluator",
 }
 
 
