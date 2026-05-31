@@ -110,3 +110,26 @@ def test_cli_run_all_dry_run_uses_planner_prompt(tmp_path):
     assert "task_analysis" in result.stdout
     assert "planner round 01" in result.stdout
     assert "required_tool_sequence" not in result.stdout
+
+
+def test_planner_agent_once_dry_run_accepts_natural_language(tmp_path):
+    gold_dir = _write_gold(tmp_path)
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "autonomous_pipeline.planner.agent",
+            "--once",
+            f"处理 {raw}，任务：肝病诊断，金标准：{gold_dir}",
+            "--dry-run",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "task_analysis" in result.stdout
+    assert "planner round 01" in result.stdout
+    assert '"status": "DRY_RUN"' in result.stdout
