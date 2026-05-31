@@ -15,6 +15,7 @@ __pycache__/
 
 # Runtime outputs
 program/output/
+program/terminal_tests/
 reorganized_output/
 output/
 logs/
@@ -57,3 +58,5 @@ agent_6-7/models/
 # Local app settings
 .claude/
 *.local.json
+config.yaml
+config.local.yaml
